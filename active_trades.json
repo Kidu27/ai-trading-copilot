@@ -1,0 +1,19 @@
+{
+  "dbce6cc1-5274-4c01-83c7-ad5737ed5d1a": {
+    "signal_id": "dbce6cc1-5274-4c01-83c7-ad5737ed5d1a",
+    "pair": "EUR/USD (MOCK DEMO)",
+    "direction": "ENTER_LONG",
+    "entry": 1.10964,
+    "fill_price": 1.10964,
+    "stop_loss": 1.10764,
+    "take_profit": 1.11414,
+    "standard_lots": 0.01,
+    "units": 1000,
+    "status": "OPEN",
+    "executor": "mock",
+    "demo_mode": true,
+    "opened_eat": "2026-11-23 21:01:25",
+    "closed_eat": null,
+    "pnl_usd": null
+  }
+}
