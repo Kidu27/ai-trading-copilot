@@ -1,0 +1,34 @@
+# ─────────────────────────────────────────────────
+#  .gitignore — AI Forex Trading Co-Pilot
+# ─────────────────────────────────────────────────
+
+# Secrets — NEVER commit these
+.env
+
+# Data logs (may contain sensitive trade history)
+*.csv
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*.pyo
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Distribution / packaging
+*.egg-info/
+dist/
+build/
+
+# Pytest cache
+.pytest_cache/
