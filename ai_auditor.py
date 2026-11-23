@@ -8,7 +8,8 @@ Design principles:
   - Python math is already done and trusted. The AI only reasons.
   - System prompt enforces a 5-step checklist + Devil's Advocate check.
   - Confluence Score < 80 → MUST output NO_TRADE.
-  - Response is strict JSON (application/json mime type).
+  - Response is strict JSON enforced by response_mime_type + response_schema
+    (Pydantic model passed to the google-genai SDK). JSON parsing never fails.
   - If the Gemini API call fails, we fail safe: return NO_TRADE.
 """
 
@@ -24,6 +25,48 @@ try:
     _GENAI_AVAILABLE = True
 except ImportError:
     _GENAI_AVAILABLE = False
+
+# Pydantic for structured response schema
+try:
+    from pydantic import BaseModel
+    _PYDANTIC_AVAILABLE = True
+except ImportError:
+    _PYDANTIC_AVAILABLE = False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Pydantic response schema — guarantees Gemini returns valid JSON
+# ─────────────────────────────────────────────────────────────────────────────
+
+if _PYDANTIC_AVAILABLE:
+    class _ChecklistStep(BaseModel):
+        result: str       # "PASS" or "FAIL"
+        reasoning: str
+
+    class _ChecklistAudit(BaseModel):
+        step1_trend:      _ChecklistStep
+        step2_zone_fib:   _ChecklistStep
+        step3_candle:     _ChecklistStep
+        step4_math:       _ChecklistStep
+        step5_volatility: _ChecklistStep
+
+    class _TradePlan(BaseModel):
+        direction:   str
+        entry:       float | None
+        stop_loss:   float | None
+        take_profit: float | None
+        risk_reward: float | None
+        risk_usd:    float | None
+        lots:        float | None
+
+    class AuditResponse(BaseModel):
+        decision:               str                 # "ENTER_LONG" | "ENTER_SHORT" | "NO_TRADE"
+        confluence_score:       int                 # 0–100
+        trend_1h:               str
+        checklist_audit:        _ChecklistAudit
+        devils_advocate_risks:  list[str]
+        trade_plan:             _TradePlan
+        plain_english_summary:  str
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -136,15 +179,21 @@ def audit(math_result: dict[str, Any]) -> dict[str, Any]:
     try:
         client = genai.Client(api_key=config.GEMINI_API_KEY)
 
+        # Build GenerateContentConfig — use response_schema when Pydantic is available
+        # so Gemini is constrained to output JSON matching our exact schema.
+        gen_config_kwargs: dict[str, Any] = {
+            "system_instruction": _SYSTEM_PROMPT,
+            "response_mime_type": "application/json",
+            "temperature":        0.1,          # Low temperature = consistent, conservative outputs
+            "max_output_tokens":  2048,
+        }
+        if _PYDANTIC_AVAILABLE:
+            gen_config_kwargs["response_schema"] = AuditResponse
+
         response = client.models.generate_content(
             model=config.GEMINI_MODEL,
             contents=user_prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=_SYSTEM_PROMPT,
-                response_mime_type="application/json",
-                temperature=0.1,          # Low temperature = consistent, conservative outputs
-                max_output_tokens=2048,
-            ),
+            config=types.GenerateContentConfig(**gen_config_kwargs),
         )
 
         raw_text = response.text.strip()

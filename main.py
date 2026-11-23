@@ -11,6 +11,11 @@ Orchestrates all 4 gates for each pair in WATCHLIST:
 Usage:
   python main.py              — single scan of all pairs
   python main.py --loop 15   — scan every 15 minutes (EAT session aware)
+
+Session guard (always active, even without --session-only):
+  If the current EAT time is Saturday or Sunday, or outside
+  10:30–19:30 EAT, the script exits immediately without spending
+  any Twelve Data or Gemini API credits.
 """
 
 import sys
@@ -26,6 +31,49 @@ import market_math
 import ai_auditor
 import notifier
 import journal
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Session guard — called once at startup before anything else
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _check_session_or_exit() -> None:
+    """
+    Exit immediately if:
+      • The current day is Saturday (weekday 5) or Sunday (weekday 6), OR
+      • The current EAT time is outside LONDON_SESSION_START–LONDON_SESSION_END.
+
+    This runs BEFORE any API calls so zero Twelve Data or Gemini credits
+    are spent outside trading hours.
+    """
+    eat_tz  = pytz.timezone(config.TIMEZONE)
+    now_eat = datetime.now(tz=eat_tz)
+
+    # Weekend block
+    if now_eat.weekday() >= 5:   # 5 = Saturday, 6 = Sunday
+        day_name = now_eat.strftime("%A")
+        print(
+            f"  🗓  {day_name} — market is closed. "
+            f"No API calls made. Exiting."
+        )
+        sys.exit(0)
+
+    # Session block
+    from datetime import time as dtime
+    start_h, start_m = map(int, config.LONDON_SESSION_START.split(":"))
+    end_h,   end_m   = map(int, config.LONDON_SESSION_END.split(":"))
+    session_start = dtime(start_h, start_m)
+    session_end   = dtime(end_h,   end_m)
+    current_time  = now_eat.time()
+
+    if not (session_start <= current_time <= session_end):
+        print(
+            f"  ⏸  Outside trading session "
+            f"({config.LONDON_SESSION_START}–{config.LONDON_SESSION_END} EAT). "
+            f"Current EAT: {now_eat.strftime('%H:%M')}. "
+            f"No API calls made. Exiting."
+        )
+        sys.exit(0)
 
 
 def run_scan() -> None:
@@ -48,6 +96,25 @@ def run_scan() -> None:
     # ── Scan each pair ────────────────────────────────────────────────────────
     for symbol in config.WATCHLIST:
         print(f"\n── Analysing {symbol} ─────────────────────────────────")
+
+        # ── Pair cooldown guard (4-hour deduplication) ────────────────────────
+        on_cooldown, hours_left = journal.check_pair_cooldown(symbol, hours=4)
+        if on_cooldown:
+            print(
+                f"  ⏳ {symbol} is on cooldown — last alert was < 4 hours ago. "
+                f"({hours_left}h remaining). Skipping."
+            )
+            continue
+        print(f"\n── Analysing {symbol} ─────────────────────────────────")
+
+        # ── Pair cooldown guard (4-hour deduplication) ────────────────────────
+        on_cooldown, hours_left = journal.check_pair_cooldown(symbol, hours=4)
+        if on_cooldown:
+            print(
+                f"  ⏳ {symbol} is on cooldown — last alert was < 4 hours ago. "
+                f"({hours_left}h remaining). Skipping."
+            )
+            continue
 
         # GATE 1: Fetch data
         try:
@@ -110,6 +177,9 @@ def _is_in_session() -> bool:
 
 
 def main() -> None:
+    # ── Session / weekend guard — exits immediately if outside trading hours ──
+    _check_session_or_exit()
+
     parser = argparse.ArgumentParser(description="AI Forex Trading Co-Pilot")
     parser.add_argument(
         "--loop",

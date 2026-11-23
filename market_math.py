@@ -35,7 +35,7 @@ def analyse(
 
     Args:
         symbol: e.g. "EUR/USD"
-        df_1h:  100-candle 1H DataFrame (oldest → newest)
+        df_1h:  300-candle 1H DataFrame (oldest → newest); 300 candles ensures EMA 200 is accurate.
         df_15m: 50-candle 15m DataFrame (oldest → newest)
 
     Returns:
@@ -92,8 +92,10 @@ def analyse(
         result["atr_15m"] = round(float(_atr(df_15m, period=14).iloc[-1]), 5)
 
     # ── 4. 15m Candle Story ───────────────────────────────────────────────────
-    # Use -2 index: last CLOSED candle (index -1 may still be forming)
-    candle_story = _analyse_candle(df_15m, candle_index=-2)
+    # Always drop the live forming candle (df.iloc[-1]).
+    # Evaluate df.iloc[-2] — the most recently CLOSED, confirmed candle.
+    df_15m_closed = df_15m.iloc[:-1]   # strip the live/forming candle entirely
+    candle_story = _analyse_candle(df_15m_closed, candle_index=-1)  # -1 of closed slice = -2 of original
     result["candle_story"] = candle_story
 
     last_10_candles = _last_n_candles(df_15m, n=10)
@@ -418,16 +420,20 @@ def _calculate_risk(
     """
     Calculate stop-loss, take-profit, R:R ratio, and position size.
 
-    Stop-Loss:  placed just outside the S/R zone + 0.5 * ATR buffer.
+    Stop-Loss:  placed just outside the S/R zone + 0.5 * ATR + 0.0002 (2-pip spread cushion).
     Take-Profit: placed just before the opposing S/R zone.
 
-    Position size in micro-lots (1 micro-lot = 1,000 units for most pairs).
-    For EUR/USD: 1 pip ≈ $0.10 per micro-lot.
+    Position size expressed in:
+      - Standard Lots (position_size_lots):  round(units / 100_000, 2), min 0.01
+        → use this for MetaTrader 5 order submissions (0.01 lot = 1,000 units)
+      - Micro Lots   (position_size_micro_lots): round(units / 1_000, 2)
+        → informational; useful for position sizing reference
 
     Returns dict with all risk metrics.
     """
     max_risk_usd = round(config.ACCOUNT_BALANCE * config.MAX_RISK_PERCENT, 2)
-    atr_buffer   = 0.5 * atr
+    # ── SPREAD CUSHION: 0.5 × ATR + 2-pip spread buffer ──────────────────────
+    atr_buffer   = 0.5 * atr + 0.0002
 
     out: dict[str, Any] = {
         "account_balance": config.ACCOUNT_BALANCE,
@@ -460,14 +466,16 @@ def _calculate_risk(
     else:
         # No valid setup
         out.update({
-            "direction":          "NONE",
-            "entry_price":        None,
-            "stop_loss":          None,
-            "take_profit":        None,
-            "risk_pips":          None,
-            "reward_pips":        None,
-            "risk_reward_ratio":  0.0,
-            "position_size_lots": None,
+            "direction":                 "NONE",
+            "entry_price":               None,
+            "stop_loss":                 None,
+            "take_profit":               None,
+            "risk_pips":                 None,
+            "reward_pips":               None,
+            "risk_reward_ratio":         0.0,
+            "position_size_lots":        None,   # Standard Lots for MT5
+            "position_size_micro_lots":  None,   # Micro lots (informational)
+            "position_size_units":       None,
         })
         return out
 
@@ -483,22 +491,29 @@ def _calculate_risk(
     reward_pips = max(reward_pips, 0)
     rr_ratio    = reward_pips / risk_pips
 
-    # Position size (micro-lots)
-    # Assumption: 1 pip = 0.0001 for major pairs; $0.10 per micro-lot per pip
-    pip_value_per_microlot = 0.10
-    pips_at_risk   = risk_pips / 0.0001          # convert price units → pips
-    micro_lots     = max_risk_usd / (pips_at_risk * pip_value_per_microlot)
+    # ── Position sizing ───────────────────────────────────────────────────────
+    # 1 pip = 0.0001 for major pairs; $10 per standard lot per pip
+    # Risk USD = pips_at_risk × pip_value_per_lot × lots
+    pip_value_per_standard_lot = 10.0            # USD per pip, 1 std lot (100k units)
+    pips_at_risk    = risk_pips / 0.0001         # convert price units → pips
+    position_size_units = max_risk_usd / (pips_at_risk * pip_value_per_standard_lot) * 100_000
+
+    # Standard Lots: used directly in MT5 (minimum 0.01)
+    std_lots   = max(round(position_size_units / 100_000, 2), 0.01)
+    # Micro Lots: informational reference
+    micro_lots = round(position_size_units / 1_000, 2)
 
     out.update({
-        "direction":          direction,
-        "entry_price":        round(entry,       5),
-        "stop_loss":          round(stop_loss,   5),
-        "take_profit":        round(take_profit, 5),
-        "risk_pips":          round(risk_pips / 0.0001,   1),
-        "reward_pips":        round(reward_pips / 0.0001, 1),
-        "risk_reward_ratio":  round(rr_ratio, 2),
-        "position_size_lots": round(micro_lots, 2),
-        "position_size_units": int(micro_lots * 1000),
+        "direction":                direction,
+        "entry_price":              round(entry,       5),
+        "stop_loss":                round(stop_loss,   5),
+        "take_profit":              round(take_profit, 5),
+        "risk_pips":                round(risk_pips / 0.0001,   1),
+        "reward_pips":              round(reward_pips / 0.0001, 1),
+        "risk_reward_ratio":        round(rr_ratio, 2),
+        "position_size_lots":       std_lots,            # Standard Lots → MT5 orders
+        "position_size_micro_lots": micro_lots,          # Micro Lots → informational
+        "position_size_units":      int(position_size_units),
     })
 
     return out

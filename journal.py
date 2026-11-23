@@ -4,11 +4,14 @@ journal.py — Trade logging & daily circuit breaker.
 Every AI-audited setup (regardless of decision) is appended to
 trades_log.csv. The circuit breaker checks today's losing trades
 and blocks further alerts if MAX_DAILY_LOSSES is reached.
+
+Cooldown guard: check_pair_cooldown() prevents duplicate alerts
+for the same currency pair within a configurable rolling window.
 """
 
 import csv
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 import pytz
@@ -76,6 +79,57 @@ def log_setup(
         writer.writerow(row)
 
     print(f"  [journal] Logged setup for {symbol} → {row['decision']}")
+
+
+def check_pair_cooldown(pair: str, hours: int = 4) -> tuple[bool, float | None]:
+    """
+    Block duplicate alerts for the same currency pair within `hours` hours.
+
+    Scans trades_log.csv for the most recent entry for `pair` and checks
+    whether it was logged within the last `hours` hours (EAT timezone).
+
+    Args:
+        pair:  Currency pair string, e.g. "EUR/USD".
+        hours: Cooldown window in hours. Default 4.
+
+    Returns:
+        (on_cooldown: bool, hours_remaining: float | None)
+        If on_cooldown is True, main.py should skip this pair's alert.
+        hours_remaining is the number of hours left in the cooldown, or None
+        if the pair has never been logged.
+    """
+    if not os.path.exists(LOG_FILE):
+        return False, None
+
+    eat_tz = pytz.timezone(config.TIMEZONE)
+    now_eat = datetime.now(tz=eat_tz)
+    cooldown_window = timedelta(hours=hours)
+
+    last_logged_at: datetime | None = None
+
+    with open(LOG_FILE, newline="", encoding="utf-8") as fh:
+        reader = csv.DictReader(fh)
+        for row in reader:
+            if row.get("pair", "").strip() == pair:
+                ts_str = row.get("timestamp_eat", "").strip()
+                if ts_str:
+                    try:
+                        ts = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
+                        ts = eat_tz.localize(ts)
+                        if last_logged_at is None or ts > last_logged_at:
+                            last_logged_at = ts
+                    except ValueError:
+                        pass
+
+    if last_logged_at is None:
+        return False, None
+
+    elapsed = now_eat - last_logged_at
+    if elapsed < cooldown_window:
+        hours_remaining = round((cooldown_window - elapsed).total_seconds() / 3600, 2)
+        return True, hours_remaining
+
+    return False, None
 
 
 def check_daily_loss_limit() -> tuple[bool, int]:
