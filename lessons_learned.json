@@ -1,0 +1,9 @@
+[
+  {
+    "timestamp_eat": "2026-11-23 21:48:18",
+    "pair": "EUR/USD",
+    "outcome": "LOSS",
+    "actionable_lesson": "Always validate that entry and stop-loss parameters align directly with current live 15-minute market structure prior to order execution.",
+    "root_cause": "Price hit the stop-loss instantly because the entry order at 1.0850 was placed far below the active market price structure trading around 1.1180."
+  }
+]

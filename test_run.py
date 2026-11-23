@@ -4,7 +4,12 @@ test_run.py — Offline & live verification CLI
 Usage:
   python test_run.py --mock
       Run end-to-end tests with synthetic data. Zero API keys needed.
-      Verifies math logic, journal, and console notifier.
+      Verifies math logic, journal, executor, and notifier.
+
+  python test_run.py --mock --simulate-close
+      Simulates closing an open trade at Stop-Loss, runs post-mortem
+      diagnosis, updates lessons_learned.json (rolling memory), and prints
+      the generated lesson to verify the self-learning loop.
 
   python test_run.py --mock --send-telegram
       Like --mock, but sends a REAL Telegram card with [✅ Accept & Enter] /
@@ -136,12 +141,13 @@ def run_mock_tests(
     regime: str = "uptrend",
     send_telegram: bool = False,
     listen_seconds: int | None = None,
+    simulate_close: bool = False,
 ) -> None:
     """Full end-to-end test with synthetic data. No API keys required."""
     _header(f"🧪 MOCK TEST RUN — regime: {regime.upper()}")
 
     # ── Test imports ──────────────────────────────────────────────────────────
-    print("\n[1/7] Testing imports …")
+    print("\n[1/8] Testing imports …")
     try:
         import data_fetcher
         import market_math
@@ -150,12 +156,13 @@ def run_mock_tests(
         import journal
         import broker_executor
         import telegram_listener
+        import post_mortem
         _ok("All modules imported successfully.")
     except ImportError as exc:
         _fail("Import error", str(exc))
 
     # ── Test mock data generation ─────────────────────────────────────────────
-    print("\n[2/7] Generating mock data …")
+    print("\n[2/8] Generating mock data …")
     df_1h, df_15m = data_fetcher.generate_mock_data(regime=regime, seed=42)
     _check(len(df_1h) == 100,  "df_1h has 100 rows",  str(len(df_1h)))
     _check(len(df_15m) == 50,  "df_15m has 50 rows",  str(len(df_15m)))
@@ -166,7 +173,7 @@ def run_mock_tests(
     print(f"     Price range 1H: {df_1h['close'].min():.5f} → {df_1h['close'].max():.5f}")
 
     # ── Test market math ──────────────────────────────────────────────────────
-    print("\n[3/7] Running market_math.analyse() …")
+    print("\n[3/8] Running market_math.analyse() …")
     result = market_math.analyse("EUR/USD (MOCK)", df_1h, df_15m)
 
     _check("trend_1h" in result,          "trend_1h key present", f"→ {result['trend_1h']}")
@@ -208,14 +215,14 @@ def run_mock_tests(
             )
 
     # ── Test candle analysis ───────────────────────────────────────────────────
-    print("\n[4/7] Verifying 15m candle story …")
+    print("\n[4/8] Verifying 15m candle story …")
     story = result["candle_story"]
     _check(story.get("available", False), "Candle story is available")
     _check("pattern" in story,            "Pattern detected",  f"→ {story.get('pattern')}")
     _check("body_pct" in story,           "body_pct computed", f"→ {story.get('body_pct')}")
 
     # ── Test CSV logging ───────────────────────────────────────────────────────
-    print("\n[5/7] Testing journal.log_setup() …")
+    print("\n[5/8] Testing journal.log_setup() …")
 
     original_log = journal.LOG_FILE
     journal.LOG_FILE = "/tmp/test_trades_log.csv"
@@ -246,7 +253,7 @@ def run_mock_tests(
     journal.LOG_FILE = original_log
 
     # ── Test MockDemoExecutor ─────────────────────────────────────────────────
-    print("\n[6/7] Testing MockDemoExecutor …")
+    print("\n[6/8] Testing MockDemoExecutor …")
     _check(config.DEMO_MODE, "DEMO_MODE is True (safe)")
 
     executor = broker_executor.get_executor()
@@ -271,7 +278,7 @@ def run_mock_tests(
             json.dump(trades, fh, indent=2)
 
     # ── Test notifier (Telegram card with buttons / console fallback) ──────────
-    print("\n[7/7] Testing notifier (interactive Telegram card) …")
+    print("\n[7/8] Testing notifier (interactive Telegram card) …")
 
     demo_math, demo_ai = _build_mock_approved_signal(result, regime)
 
@@ -314,6 +321,45 @@ def run_mock_tests(
             print("  ℹ️  --send-telegram was requested but TELEGRAM_BOT_TOKEN / "
                   "TELEGRAM_CHAT_ID are not set in .env. Add them and retry.")
 
+    # ── Test Post-Mortem & Rolling Memory Loop ────────────────────────────────
+    print("\n[8/8] Testing post-mortem & rolling memory loop …")
+    import post_mortem
+
+    # Run simulated trade close at Stop-Loss
+    pm_report = post_mortem.simulate_mock_close(
+        outcome="LOSS",
+        mock_candles=df_15m,
+    )
+    _check("root_cause" in pm_report, "Post-mortem root_cause generated")
+    _check("rule_followed" in pm_report, "Post-mortem rule_followed generated")
+    _check("actionable_lesson" in pm_report, "Actionable lesson generated")
+    _ok("Generated lesson", f"→ {pm_report.get('actionable_lesson')}")
+
+    # Verify lessons_learned.json
+    lessons = post_mortem.get_recent_lessons()
+    _check(len(lessons) > 0, "lessons_learned.json populated", f"→ {len(lessons)} lesson(s)")
+    _check(len(lessons) <= 10, "lessons_learned.json rolling window capped at 10")
+
+    # Verify dynamic prompt injection in ai_auditor
+    dynamic_prompt = ai_auditor._build_system_prompt()
+    _check("RECENT POST-MORTEM LESSONS" in dynamic_prompt,
+           "ai_auditor dynamically injected recent lessons into system prompt")
+
+    if simulate_close:
+        _header("🔬 SIMULATED TRADE CLOSE & POST-MORTEM REPORT")
+        print(f"  📌 Pair       : {pm_report.get('pair')}")
+        print(f"  📊 Outcome    : {pm_report.get('outcome')} (${pm_report.get('pnl_usd')})")
+        print(f"  💵 Exit Price : {pm_report.get('exit_price')}")
+        print(f"  ⏱  Closed EAT : {pm_report.get('duration')}")
+        print(f"\n  ── Root Cause Analysis ──")
+        print(f"  {pm_report.get('root_cause')}")
+        print(f"\n  ── Playbook Compliance ──")
+        print(f"  {pm_report.get('rule_followed')}")
+        print(f"\n  ── Actionable Lesson ──")
+        print(f"  💡 {pm_report.get('actionable_lesson')}")
+        print(f"\n  🧠 Memory store: lessons_learned.json has {len(lessons)} rolling lesson(s).")
+        print(f"  ✅ Future AI auditor checks will now automatically enforce this lesson.")
+
     # ── Summary ───────────────────────────────────────────────────────────────
     _header("✅ ALL MOCK TESTS PASSED")
     print(f"\n  Regime tested : {regime.upper()}")
@@ -323,6 +369,7 @@ def run_mock_tests(
     print(f"  R:R ratio     : {result.get('risk_reward_ratio', 'N/A')}")
     print(f"  Std Lots      : {result.get('position_size_lots', 'N/A')} (MT5)")
     print(f"  Micro Lots    : {result.get('position_size_micro_lots', 'N/A')} (ref)")
+    print(f"  Memory lessons: {len(lessons)} lesson(s) active in ai_auditor")
     print(f"\n  Full Gate 2 JSON output:")
     display = {k: v for k, v in result.items() if k != "last_10_candles_15m"}
     print(json.dumps(display, indent=2, default=str))
@@ -426,6 +473,14 @@ def main() -> None:
             "seconds so you can tap the button on your phone to test execution."
         ),
     )
+    parser.add_argument(
+        "--simulate-close",
+        action="store_true",
+        help=(
+            "In --mock mode: simulate closing an open trade at Stop-Loss, "
+            "run post-mortem learning loop, and update lessons_learned.json."
+        ),
+    )
     args = parser.parse_args()
 
     if args.mock:
@@ -434,6 +489,7 @@ def main() -> None:
             regime=args.regime,
             send_telegram=args.send_telegram,
             listen_seconds=listen_secs,
+            simulate_close=args.simulate_close,
         )
     elif args.live:
         run_live_test()

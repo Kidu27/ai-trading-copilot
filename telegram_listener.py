@@ -42,6 +42,7 @@ import requests
 import config
 import notifier
 import broker_executor
+import journal
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -186,8 +187,20 @@ def _handle_accept(
 
     if result["success"]:
         notifier.update_signal_status(signal_id, "EXECUTED")
-        exec_tag   = "[DEMO MOCK]" if config.DEMO_MODE else "[LIVE]"
         fill_price = result.get("fill_price", signal.get("entry", "?"))
+
+        # Log EXECUTED row to trades_log.csv immediately via journal.py
+        try:
+            fill_price_val = result.get("fill_price") or signal.get("entry")
+            journal.log_executed_trade(
+                signal,
+                fill_price=float(fill_price_val) if fill_price_val is not None else None,
+                notes="Executed via Telegram button",
+            )
+        except Exception as exc:
+            print(f"  [listener] Warning: failed to log execution to journal: {exc}")
+
+        exec_tag   = "[DEMO MOCK]" if config.DEMO_MODE else "[LIVE]"
         edit_text  = (
             f"✅ Order Executed {exec_tag}\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -274,6 +287,20 @@ def _process_callback_query(cq: dict[str, Any]) -> None:
 
     if action == "decline":
         _handle_decline(signal_id, signal, chat_id, message_id, callback_query_id)
+        # Update outcome in journal as well
+        eat_tz  = pytz.timezone(config.TIMEZONE)
+        now_eat = datetime.now(tz=eat_tz).strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            journal.update_trade_outcome(
+                signal_id=signal_id,
+                exit_price=0.0,
+                exit_time=now_eat,
+                pnl_usd=0.0,
+                outcome="DECLINED",
+                notes="Declined by user via Telegram",
+            )
+        except Exception:
+            pass
     elif action == "accept":
         _handle_accept(signal_id, signal, chat_id, message_id, callback_query_id)
     else:

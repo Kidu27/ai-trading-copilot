@@ -73,7 +73,7 @@ if _PYDANTIC_AVAILABLE:
 # System prompt — the AI's immutable rule book
 # ─────────────────────────────────────────────────────────────────────────────
 
-_SYSTEM_PROMPT = """
+_BASE_SYSTEM_PROMPT = """
 You are an elite Forex risk management auditor for a retail trader with a small \
 $500 account. Your ONLY job is to audit whether the mathematical setup presented \
 to you meets ALL criteria for a high-probability trade signal.
@@ -153,6 +153,49 @@ Return ONLY valid JSON matching this exact schema:
 }
 """.strip()
 
+_SYSTEM_PROMPT = _BASE_SYSTEM_PROMPT
+
+
+def _load_recent_lessons() -> list[dict[str, Any]]:
+    """Load the rolling memory of lessons learned from lessons_learned.json."""
+    import os
+    lessons_path = os.path.join(os.path.dirname(__file__), "lessons_learned.json")
+    if not os.path.exists(lessons_path):
+        return []
+    try:
+        with open(lessons_path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+            return data if isinstance(data, list) else []
+    except (json.JSONDecodeError, OSError):
+        return []
+
+
+def _build_system_prompt() -> str:
+    """
+    Build the full system prompt, dynamically injecting recent post-mortem
+    lessons from lessons_learned.json into a dedicated section.
+    """
+    lessons = _load_recent_lessons()
+    if not lessons:
+        return _BASE_SYSTEM_PROMPT
+
+    recent = lessons[-10:]
+    lines = [
+        "\n\n### RECENT POST-MORTEM LESSONS (APPLY THESE STRICTLY)",
+        "You have accumulated the following historical diagnostic lessons from recently closed "
+        "demo trades. You MUST cross-reference the current setup against these past takeaways. "
+        "If the current market setup exhibits a failure mode or repeats a mistake noted below, "
+        "strictly PENALIZE the Confluence Score or output `NO_TRADE`:\n",
+    ]
+    for i, item in enumerate(recent, 1):
+        outcome = item.get("outcome", "TRADE").upper()
+        pair    = item.get("pair", "UNKNOWN")
+        lesson  = item.get("actionable_lesson", "").strip()
+        ts      = item.get("timestamp_eat", "")
+        lines.append(f"{i}. [{outcome}] {pair} ({ts}): {lesson}")
+
+    return _BASE_SYSTEM_PROMPT + "\n" + "\n".join(lines)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Public entry point
@@ -181,8 +224,9 @@ def audit(math_result: dict[str, Any]) -> dict[str, Any]:
 
         # Build GenerateContentConfig — use response_schema when Pydantic is available
         # so Gemini is constrained to output JSON matching our exact schema.
+        # System prompt dynamically includes past post-mortem lessons from lessons_learned.json.
         gen_config_kwargs: dict[str, Any] = {
-            "system_instruction": _SYSTEM_PROMPT,
+            "system_instruction": _build_system_prompt(),
             "response_mime_type": "application/json",
             "temperature":        0.1,          # Low temperature = consistent, conservative outputs
             "max_output_tokens":  2048,
@@ -190,12 +234,31 @@ def audit(math_result: dict[str, Any]) -> dict[str, Any]:
         if _PYDANTIC_AVAILABLE:
             gen_config_kwargs["response_schema"] = AuditResponse
 
-        response = client.models.generate_content(
-            model=config.GEMINI_MODEL,
-            contents=user_prompt,
-            config=types.GenerateContentConfig(**gen_config_kwargs),
-        )
-
+        fallback_models = list(dict.fromkeys([
+            config.GEMINI_MODEL,
+            "gemini-3.8-flash",
+            "gemini-3.6-flash",
+            "gemini-3.1-flash-lite",
+            "gemini-3.5-flash-lite",
+        ]))
+        response = None
+        last_err = None
+        for model_name in fallback_models:
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=user_prompt,
+                    config=types.GenerateContentConfig(**gen_config_kwargs),
+                )
+                break
+            except Exception as err:  # noqa: BLE001
+                last_err = err
+                if "503" in str(err) or "UNAVAILABLE" in str(err):
+                    continue
+                raise
+        if response is None and last_err is not None:
+            raise last_err
+            
         raw_text = response.text.strip()
         ai_json  = json.loads(raw_text)
         return _validate_response(ai_json, math_result)
