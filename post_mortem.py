@@ -206,28 +206,45 @@ def analyze_trade_with_ai(
             if _PYDANTIC_AVAILABLE:
                 gen_kwargs["response_schema"] = PostMortemAnalysis
 
-            fallback_models = list(dict.fromkeys([
-                config.GEMINI_MODEL,
+            fallback_models = [
                 "gemini-3.8-flash",
                 "gemini-3.6-flash",
                 "gemini-3.1-flash-lite",
                 "gemini-3.5-flash-lite",
-            ]))
+            ]
             response = None
             last_err = None
             for model_name in fallback_models:
+                cfg = dict(gen_kwargs)
                 try:
-                    response = client.models.generate_content(
-                        model=model_name,
-                        contents=user_prompt,
-                        config=types.GenerateContentConfig(**gen_kwargs),
-                    )
-                    break
+                    try:
+                        response = client.models.generate_content(
+                            model=model_name,
+                            contents=user_prompt,
+                            config=types.GenerateContentConfig(**cfg),
+                        )
+                    except Exception as call_err:
+                        err_str = str(call_err).upper()
+                        if (
+                            "400" in err_str
+                            or "INVALID_ARGUMENT" in err_str
+                            or "INVALIDARGUMENT" in err_str
+                            or "SCHEMA" in err_str
+                        ) and "response_schema" in cfg:
+                            cfg.pop("response_schema", None)
+                            response = client.models.generate_content(
+                                model=model_name,
+                                contents=user_prompt,
+                                config=types.GenerateContentConfig(**cfg),
+                            )
+                        else:
+                            raise call_err
+                    if response and response.text and response.text.strip():
+                        break
                 except Exception as err:  # noqa: BLE001
                     last_err = err
-                    if "503" in str(err) or "UNAVAILABLE" in str(err):
-                        continue
-                    raise
+                    print(f"  [post_mortem] Model {model_name} failed: {err}. Retrying fallback...")
+                    continue
             if response is None and last_err is not None:
                 raise last_err
                 

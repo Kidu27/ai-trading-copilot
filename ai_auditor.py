@@ -279,23 +279,22 @@ def audit(math_result: dict[str, Any]) -> dict[str, Any]:
         # Multi-model fallback chain: primary -> fallback list
         fallback_models = list(dict.fromkeys([
             config.GEMINI_MODEL,
-            "gemini-4-hydrogen",
             "gemini-3.8-flash",
+            "gemini-3.6-flash",
             "gemini-3.1-flash-lite",
-            "gemini-2.5-flash",
+            "gemini-3.5-flash-lite",
         ]))
 
-        last_err: Exception | None = None
+        model_errors: list[str] = []
 
         for model_name in fallback_models:
             try:
-                # Configure thinking budget. For gemini-2.5-* or models rejecting thinking_level, fall back cleanly.
+                # Configure thinking budget
                 cfg_kwargs = dict(gen_config_kwargs)
-                if not model_name.startswith("gemini-2.5"):
-                    try:
-                        cfg_kwargs["thinking_config"] = types.ThinkingConfig(thinking_level="low")
-                    except Exception:
-                        pass
+                try:
+                    cfg_kwargs["thinking_config"] = types.ThinkingConfig(thinking_level="low")
+                except Exception:
+                    pass
 
                 try:
                     response = client.models.generate_content(
@@ -304,9 +303,20 @@ def audit(math_result: dict[str, Any]) -> dict[str, Any]:
                         config=types.GenerateContentConfig(**cfg_kwargs),
                     )
                 except Exception as call_err:
-                    # If model rejected thinking_level / thinking_config, retry cleanly without it
-                    if "thinking" in str(call_err).lower() and "thinking_config" in cfg_kwargs:
+                    err_str = str(call_err).upper()
+                    # If model rejected thinking_config, response_schema, or threw 400 / INVALID_ARGUMENT,
+                    # strip BOTH thinking_config and response_schema and retry once
+                    if (
+                        "400" in err_str
+                        or "INVALID_ARGUMENT" in err_str
+                        or "INVALIDARGUMENT" in err_str
+                        or "THINKING" in err_str
+                        or "SCHEMA" in err_str
+                    ) and (
+                        "thinking_config" in cfg_kwargs or "response_schema" in cfg_kwargs
+                    ):
                         cfg_kwargs.pop("thinking_config", None)
+                        cfg_kwargs.pop("response_schema", None)
                         response = client.models.generate_content(
                             model=model_name,
                             contents=user_prompt,
@@ -318,26 +328,26 @@ def audit(math_result: dict[str, Any]) -> dict[str, Any]:
                 # 1. Response extraction
                 if not response:
                     print(f"  [ai_auditor] Warning: {model_name} returned empty response. Retrying next model...")
-                    last_err = RuntimeError(f"{model_name} returned empty response")
+                    model_errors.append(f"{model_name}: returned empty response")
                     continue
 
                 try:
                     raw_resp = response.text
                 except Exception as text_err:
                     print(f"  [ai_auditor] Warning: {model_name} response.text could not be read: {text_err}. Retrying next model...")
-                    last_err = text_err
+                    model_errors.append(f"{model_name}: response.text unreadable ({text_err})")
                     continue
 
                 if not raw_resp or not raw_resp.strip():
                     print(f"  [ai_auditor] Warning: {model_name} returned empty text. Retrying next model...")
-                    last_err = RuntimeError(f"{model_name} returned empty text")
+                    model_errors.append(f"{model_name}: returned empty text")
                     continue
 
                 # 2. Markdown code-fence stripping
                 raw_text = _clean_json_text(raw_resp)
                 if not raw_text:
                     print(f"  [ai_auditor] Warning: {model_name} returned empty text after stripping code fences. Retrying next model...")
-                    last_err = RuntimeError(f"{model_name} returned empty text after cleaning")
+                    model_errors.append(f"{model_name}: empty text after cleaning")
                     continue
 
                 # 3. json.loads() inside model fallback loop
@@ -346,14 +356,15 @@ def audit(math_result: dict[str, Any]) -> dict[str, Any]:
 
             except json.JSONDecodeError as decode_err:
                 print(f"  [ai_auditor] Warning: {model_name} returned invalid/truncated JSON: {decode_err}. Retrying next model...")
-                last_err = decode_err
+                model_errors.append(f"{model_name}: JSONDecodeError ({decode_err})")
                 continue
             except Exception as err:
                 print(f"  [ai_auditor] Warning: {model_name} call failed: {err}. Retrying next model...")
-                last_err = err
+                model_errors.append(f"{model_name}: {err}")
                 continue
 
-        return _fail_safe(f"All Gemini models exhausted. Last error: {last_err}")
+        errors_summary = " | ".join(model_errors) if model_errors else "No models executed"
+        return _fail_safe(f"All Gemini models exhausted. Errors: {errors_summary}")
 
     except Exception as exc:  # noqa: BLE001
         return _fail_safe(f"Gemini API initialization error: {exc}")

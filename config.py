@@ -63,7 +63,7 @@ MIN_CONFLUENCE_SCORE: int = get_min_confluence_score()
 USE_V2_INDICATORS: bool = True      # Enable EMA 50/200, Fibonacci Golden Zone, ATR
 
 # ── AI Model ──────────────────────────────────────────────────────────────────
-GEMINI_MODEL: str = "gemini-4-hydrogen"
+GEMINI_MODEL: str = "gemini-3.8-flash"
 
 # ── Twelve Data ───────────────────────────────────────────────────────────────
 TD_BASE_URL: str = "https://api.twelvedata.com"
