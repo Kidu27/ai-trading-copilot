@@ -17,6 +17,8 @@ import json
 from typing import Any
 
 import config
+import news_fetcher
+import pattern_stats
 
 # Official Google GenAI SDK
 try:
@@ -51,22 +53,34 @@ if _PYDANTIC_AVAILABLE:
         step5_volatility: _ChecklistStep
 
     class _TradePlan(BaseModel):
-        direction:   str
-        entry:       float | None
-        stop_loss:   float | None
-        take_profit: float | None
-        risk_reward: float | None
-        risk_usd:    float | None
-        lots:        float | None
+        direction:   str = "NONE"
+        entry:       float | None = None
+        stop_loss:   float | None = None
+        take_profit: float | None = None
+        risk_reward: float | None = None
+        risk_usd:    float | None = None
+        lots:        float | None = None
 
     class AuditResponse(BaseModel):
         decision:               str                 # "ENTER_LONG" | "ENTER_SHORT" | "NO_TRADE"
         confluence_score:       int                 # 0–100
-        trend_1h:               str
+        trend_1h:               str = "UNKNOWN"
         checklist_audit:        _ChecklistAudit
         devils_advocate_risks:  list[str]
         trade_plan:             _TradePlan
         plain_english_summary:  str
+
+        @property
+        def checklist(self) -> _ChecklistAudit:
+            return self.checklist_audit
+
+        @property
+        def devils_advocate(self) -> list[str]:
+            return self.devils_advocate_risks
+
+        @property
+        def summary(self) -> str:
+            return self.plain_english_summary
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -172,29 +186,55 @@ def _load_recent_lessons() -> list[dict[str, Any]]:
 
 def _build_system_prompt() -> str:
     """
-    Build the full system prompt, dynamically injecting recent post-mortem
-    lessons from lessons_learned.json into a dedicated section.
+    Build the full system prompt, dynamically injecting:
+      1. WINNING SIGNATURES TO PRIORITIZE (Winning DNA from pattern_stats)
+      2. PAST LOSS LESSONS TO AVOID (from lessons_learned.json)
     """
+    min_score = getattr(config, "get_min_confluence_score", lambda: config.MIN_CONFLUENCE_SCORE)()
+    prompt = _BASE_SYSTEM_PROMPT.replace(
+        "Any Confluence Score below 80 MUST produce `NO_TRADE`.",
+        f"Any Confluence Score below {min_score} MUST produce `NO_TRADE`."
+    ).replace(
+        "Score < 80 → decision MUST be `NO_TRADE`.",
+        f"Score < {min_score} → decision MUST be `NO_TRADE`."
+    )
+
+    sections = []
+
+    # 1. Winning DNA from pattern_stats
+    try:
+        win_dna = pattern_stats.get_win_signature_summary()
+        if win_dna:
+            sections.append(
+                "\n\n### WINNING SIGNATURES TO PRIORITIZE (WINNING DNA)\n"
+                "The following indicator combinations have yielded the highest win rates in our closed trades. "
+                "Actively look for and prioritize setups that exhibit these high-probability characteristics:\n"
+                f"{win_dna}"
+            )
+    except Exception as exc:
+        pass
+
+    # 2. Historical loss lessons to avoid
     lessons = _load_recent_lessons()
-    if not lessons:
-        return _BASE_SYSTEM_PROMPT
+    if lessons:
+        recent = lessons[-10:]
+        loss_lines = [
+            "\n\n### PAST LOSS LESSONS TO AVOID\n"
+            "You have accumulated the following historical diagnostic lessons from recently closed "
+            "demo trades. You MUST cross-reference the current setup against these past failure modes. "
+            f"If the setup repeats a known mistake described below, strictly PENALIZE the Confluence Score below {min_score} or output `NO_TRADE`:\n"
+        ]
+        for i, item in enumerate(recent, 1):
+            outcome = item.get("outcome", "TRADE").upper()
+            pair    = item.get("pair", "UNKNOWN")
+            lesson  = item.get("actionable_lesson", "").strip()
+            ts      = item.get("timestamp_eat", "")
+            loss_lines.append(f"{i}. [{outcome}] {pair} ({ts}): {lesson}")
+        sections.append("\n".join(loss_lines))
 
-    recent = lessons[-10:]
-    lines = [
-        "\n\n### RECENT POST-MORTEM LESSONS (APPLY THESE STRICTLY)",
-        "You have accumulated the following historical diagnostic lessons from recently closed "
-        "demo trades. You MUST cross-reference the current setup against these past takeaways. "
-        "If the current market setup exhibits a failure mode or repeats a mistake noted below, "
-        "strictly PENALIZE the Confluence Score or output `NO_TRADE`:\n",
-    ]
-    for i, item in enumerate(recent, 1):
-        outcome = item.get("outcome", "TRADE").upper()
-        pair    = item.get("pair", "UNKNOWN")
-        lesson  = item.get("actionable_lesson", "").strip()
-        ts      = item.get("timestamp_eat", "")
-        lines.append(f"{i}. [{outcome}] {pair} ({ts}): {lesson}")
-
-    return _BASE_SYSTEM_PROMPT + "\n" + "\n".join(lines)
+    if sections:
+        return prompt + "".join(sections)
+    return prompt
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -222,66 +262,138 @@ def audit(math_result: dict[str, Any]) -> dict[str, Any]:
     try:
         client = genai.Client(api_key=config.GEMINI_API_KEY)
 
-        # Build GenerateContentConfig — use response_schema when Pydantic is available
-        # so Gemini is constrained to output JSON matching our exact schema.
-        # System prompt dynamically includes past post-mortem lessons from lessons_learned.json.
+        # Build GenerateContentConfig — strict JSON enforced by response_mime_type + response_schema
+        # max_output_tokens=8192 ensures complete JSON output without truncation.
         gen_config_kwargs: dict[str, Any] = {
             "system_instruction": _build_system_prompt(),
             "response_mime_type": "application/json",
             "temperature":        0.1,          # Low temperature = consistent, conservative outputs
-            "max_output_tokens":  2048,
+            "max_output_tokens": 8192,
         }
         if _PYDANTIC_AVAILABLE:
             gen_config_kwargs["response_schema"] = AuditResponse
 
+        # Multi-model fallback chain: primary -> fallback list
         fallback_models = list(dict.fromkeys([
             config.GEMINI_MODEL,
+            "gemini-4-hydrogen",
             "gemini-3.8-flash",
-            "gemini-3.6-flash",
             "gemini-3.1-flash-lite",
-            "gemini-3.5-flash-lite",
+            "gemini-2.5-flash",
         ]))
-        response = None
-        last_err = None
+
+        last_err: Exception | None = None
+
         for model_name in fallback_models:
             try:
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=user_prompt,
-                    config=types.GenerateContentConfig(**gen_config_kwargs),
-                )
-                break
-            except Exception as err:  # noqa: BLE001
-                last_err = err
-                if "503" in str(err) or "UNAVAILABLE" in str(err):
-                    continue
-                raise
-        if response is None and last_err is not None:
-            raise last_err
-            
-        raw_text = response.text.strip()
-        ai_json  = json.loads(raw_text)
-        return _validate_response(ai_json, math_result)
+                # Configure thinking budget. For gemini-2.5-* or models rejecting thinking_level, fall back cleanly.
+                cfg_kwargs = dict(gen_config_kwargs)
+                if not model_name.startswith("gemini-2.5"):
+                    try:
+                        cfg_kwargs["thinking_config"] = types.ThinkingConfig(thinking_level="low")
+                    except Exception:
+                        pass
 
-    except json.JSONDecodeError as exc:
-        return _fail_safe(f"Gemini returned invalid JSON: {exc}")
+                try:
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=user_prompt,
+                        config=types.GenerateContentConfig(**cfg_kwargs),
+                    )
+                except Exception as call_err:
+                    # If model rejected thinking_level / thinking_config, retry cleanly without it
+                    if "thinking" in str(call_err).lower() and "thinking_config" in cfg_kwargs:
+                        cfg_kwargs.pop("thinking_config", None)
+                        response = client.models.generate_content(
+                            model=model_name,
+                            contents=user_prompt,
+                            config=types.GenerateContentConfig(**cfg_kwargs),
+                        )
+                    else:
+                        raise call_err
+
+                # 1. Response extraction
+                if not response:
+                    print(f"  [ai_auditor] Warning: {model_name} returned empty response. Retrying next model...")
+                    last_err = RuntimeError(f"{model_name} returned empty response")
+                    continue
+
+                try:
+                    raw_resp = response.text
+                except Exception as text_err:
+                    print(f"  [ai_auditor] Warning: {model_name} response.text could not be read: {text_err}. Retrying next model...")
+                    last_err = text_err
+                    continue
+
+                if not raw_resp or not raw_resp.strip():
+                    print(f"  [ai_auditor] Warning: {model_name} returned empty text. Retrying next model...")
+                    last_err = RuntimeError(f"{model_name} returned empty text")
+                    continue
+
+                # 2. Markdown code-fence stripping
+                raw_text = _clean_json_text(raw_resp)
+                if not raw_text:
+                    print(f"  [ai_auditor] Warning: {model_name} returned empty text after stripping code fences. Retrying next model...")
+                    last_err = RuntimeError(f"{model_name} returned empty text after cleaning")
+                    continue
+
+                # 3. json.loads() inside model fallback loop
+                ai_json = json.loads(raw_text)
+                return _validate_response(ai_json, math_result)
+
+            except json.JSONDecodeError as decode_err:
+                print(f"  [ai_auditor] Warning: {model_name} returned invalid/truncated JSON: {decode_err}. Retrying next model...")
+                last_err = decode_err
+                continue
+            except Exception as err:
+                print(f"  [ai_auditor] Warning: {model_name} call failed: {err}. Retrying next model...")
+                last_err = err
+                continue
+
+        return _fail_safe(f"All Gemini models exhausted. Last error: {last_err}")
+
     except Exception as exc:  # noqa: BLE001
-        return _fail_safe(f"Gemini API error: {exc}")
+        return _fail_safe(f"Gemini API initialization error: {exc}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Internal helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _clean_json_text(text: str) -> str:
+    """
+    Strip markdown code fences (e.g. ```json ... ```) and leading/trailing whitespace
+    so json.loads() receives clean JSON.
+    """
+    raw = text.strip()
+    if raw.startswith("```"):
+        first_newline = raw.find("\n")
+        if first_newline != -1:
+            raw = raw[first_newline + 1:]
+        else:
+            raw = raw.lstrip("`")
+    if raw.endswith("```"):
+        last_fence = raw.rfind("```")
+        if last_fence != -1:
+            raw = raw[:last_fence]
+    return raw.strip()
+
+
 def _build_user_prompt(math_result: dict[str, Any]) -> str:
-    """Format the Python math dict as a structured audit request."""
-    # Redact the full candle list to keep token count down
-    summary = {k: v for k, v in math_result.items() if k != "last_10_candles_15m"}
+    """Format the Python math dict and live news context as a structured audit request."""
+    symbol = math_result.get("symbol", "UNKNOWN")
+    summary = {k: v for k, v in math_result.items() if k not in ("last_10_candles_15m", "_news_data")}
     candle_story = math_result.get("candle_story", {})
     last_candles  = math_result.get("last_10_candles_15m", [])
 
+    # Fetch live FX news headlines for this pair
+    news_data = news_fetcher.get_news_for_pair(symbol)
+    math_result["_news_data"] = news_data
+
+    headline_bullets = [f"  • {h}" for h in news_data.get("headlines", [])] if news_data.get("headlines") else ["  • No breaking headline spikes detected; regular order flow."]
+
     prompt_parts = [
-        f"## Forex Setup Audit Request — {math_result.get('symbol', 'UNKNOWN')}",
+        f"## Forex Setup Audit Request — {symbol}",
         "",
         "### Python Math Engine Output (trust these numbers completely):",
         "```json",
@@ -293,9 +405,16 @@ def _build_user_prompt(math_result: dict[str, Any]) -> str:
         json.dumps(last_candles, indent=2),
         "```",
         "",
+        f"### Live FX News Headlines & Context ({symbol}):",
+        f"- Sentiment Bias: {news_data.get('news_bias', 'NEUTRAL')}",
+        f"- Context: {news_data.get('summary', '')}",
+        "- Recent Headlines:",
+        *headline_bullets,
+        "",
         "### Your Task:",
         "Run your 5-step audit checklist on this setup.",
         "Apply the Devil's Advocate check.",
+        "Cross-reference Winning DNA signatures and past loss lessons.",
         "Output ONLY the JSON response schema defined in your system prompt.",
     ]
 
@@ -307,27 +426,48 @@ def _validate_response(ai_json: dict, math_result: dict[str, Any]) -> dict[str, 
     Validate the AI response and enforce hard rules.
 
     Rules enforced here (belt-and-suspenders, in case AI ignores system prompt):
-      - Confluence score < 80 → force NO_TRADE.
+      - Confluence score < dynamic MIN_CONFLUENCE_SCORE (65 in Demo Discovery, 80 in Live) → force NO_TRADE.
       - If Python gate failed → force NO_TRADE.
       - If decision not in allowed values → force NO_TRADE.
     """
+    # Normalize aliases so both naming conventions are always available
+    if "checklist_audit" in ai_json and "checklist" not in ai_json:
+        ai_json["checklist"] = ai_json["checklist_audit"]
+    elif "checklist" in ai_json and "checklist_audit" not in ai_json:
+        ai_json["checklist_audit"] = ai_json["checklist"]
+
+    if "devils_advocate_risks" in ai_json and "devils_advocate" not in ai_json:
+        ai_json["devils_advocate"] = ai_json["devils_advocate_risks"]
+    elif "devils_advocate" in ai_json and "devils_advocate_risks" not in ai_json:
+        ai_json["devils_advocate_risks"] = ai_json["devils_advocate"]
+
+    if "plain_english_summary" in ai_json and "summary" not in ai_json:
+        ai_json["summary"] = ai_json["plain_english_summary"]
+    elif "summary" in ai_json and "plain_english_summary" not in ai_json:
+        ai_json["plain_english_summary"] = ai_json["summary"]
+
     allowed_decisions = {"ENTER_LONG", "ENTER_SHORT", "NO_TRADE"}
 
     if ai_json.get("decision") not in allowed_decisions:
         ai_json["decision"] = "NO_TRADE"
         ai_json["_override"] = "Invalid decision value — forced to NO_TRADE."
 
+    min_score = getattr(config, "get_min_confluence_score", lambda: config.MIN_CONFLUENCE_SCORE)()
     score = int(ai_json.get("confluence_score", 0))
-    if score < config.MIN_CONFLUENCE_SCORE:
+    if score < min_score:
         ai_json["decision"] = "NO_TRADE"
         ai_json["_override"] = (
-            f"Confluence score {score} < minimum {config.MIN_CONFLUENCE_SCORE} — forced to NO_TRADE."
+            f"Confluence score {score} < minimum {min_score} — forced to NO_TRADE."
         )
 
     if not math_result.get("passed_math_gate", False):
         ai_json["decision"] = "NO_TRADE"
         reasons = math_result.get("fail_reasons", ["Math gate failed."])
         ai_json["_override"] = f"Python math gate failed: {'; '.join(reasons)}"
+
+    news = math_result.get("_news_data", {})
+    ai_json["news_bias"] = news.get("news_bias", "NEUTRAL")
+    ai_json["news_headlines"] = news.get("headlines", [])
 
     return ai_json
 
@@ -339,7 +479,9 @@ def _fail_safe(reason: str) -> dict[str, Any]:
         "confluence_score":  0,
         "trend_1h":          "UNKNOWN",
         "checklist_audit":   {},
+        "checklist":         {},
         "devils_advocate_risks": [reason],
+        "devils_advocate":   [reason],
         "trade_plan": {
             "direction":   "NONE",
             "entry":       None,
@@ -350,5 +492,6 @@ def _fail_safe(reason: str) -> dict[str, Any]:
             "lots":        None,
         },
         "plain_english_summary": f"AI auditor unavailable — NO_TRADE by default. Reason: {reason}",
+        "summary":                f"AI auditor unavailable — NO_TRADE by default. Reason: {reason}",
         "_fail_safe": True,
     }

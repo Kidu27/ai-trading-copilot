@@ -337,35 +337,16 @@ class MT5MacBridgeExecutor(BrokerExecutor):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def get_executor() -> BrokerExecutor:
-    """
-    Return the appropriate executor based on config.
-
-    Rules:
-      - DEMO_MODE = True  → always MockDemoExecutor (safe default).
-      - DEMO_MODE = False AND MT5_FILES_DIR is set → MT5MacBridgeExecutor.
-      - DEMO_MODE = False AND MT5_FILES_DIR is empty → MockDemoExecutor + warning.
-    """
-    if config.DEMO_MODE:
-        print("  [broker_executor] DEMO_MODE=True → using MockDemoExecutor.")
-        return MockDemoExecutor()
-
-    if config.MT5_FILES_DIR:
-        print(
-            f"  [broker_executor] DEMO_MODE=False + MT5_FILES_DIR set → "
-            f"using MT5MacBridgeExecutor."
-        )
-        return MT5MacBridgeExecutor(config.MT5_FILES_DIR)
-
-    print(
-        "  [broker_executor] ⚠️  DEMO_MODE=False but MT5_FILES_DIR is not set. "
-        "Falling back to MockDemoExecutor."
-    )
+    """Return MT5MacBridgeExecutor when MT5_FILES_DIR is configured, else MockDemoExecutor."""
+    import os
+    mt5_dir = getattr(config, "MT5_FILES_DIR", "") or os.getenv("MT5_FILES_DIR", "")
+    if mt5_dir and os.path.isdir(mt5_dir):
+        print(f"  [broker_executor] MT5_FILES_DIR active (DEMO_MODE={config.DEMO_MODE}) → using MT5MacBridgeExecutor.")
+        return MT5MacBridgeExecutor(mt5_dir)
+    print(f"  [broker_executor] DEMO_MODE={config.DEMO_MODE} (no MT5 path) → using MockDemoExecutor.")
     return MockDemoExecutor()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Shared helper — active trades persistence
-# ─────────────────────────────────────────────────────────────────────────────
 
 def _append_active_trade(trade: dict[str, Any]) -> None:
     """Add a trade record to active_trades.json (keyed by signal_id)."""

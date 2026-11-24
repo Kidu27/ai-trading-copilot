@@ -200,55 +200,48 @@ def update_trade_outcome(
     return True
 
 
-def check_pair_cooldown(pair: str, hours: int = 4) -> tuple[bool, float | None]:
-    """
-    Block duplicate alerts for the same currency pair within `hours` hours.
-
-    Scans trades_log.csv for the most recent entry for `pair` and checks
-    whether it was logged within the last `hours` hours (EAT timezone).
-
-    Args:
-        pair:  Currency pair string, e.g. "EUR/USD".
-        hours: Cooldown window in hours. Default 4.
-
-    Returns:
-        (on_cooldown: bool, hours_remaining: float | None)
-        If on_cooldown is True, main.py should skip this pair's alert.
-        hours_remaining is the number of hours left in the cooldown, or None
-        if the pair has never been logged.
-    """
-    if not os.path.exists(LOG_FILE):
-        return False, None
+def check_pair_cooldown(pair: str, hours: float | None = None) -> tuple[bool, float]:
+    """Return (is_on_cooldown, hours_remaining) based ONLY on actionable trade alerts, ignoring NO_TRADE."""
+    cooldown_hrs = float(hours if hours is not None else getattr(config, "PAIR_COOLDOWN_HOURS", 1.0))
+    if getattr(config, "DEMO_DISCOVERY_MODE", False):
+        cooldown_hrs = min(cooldown_hrs, 1.0)
+    if cooldown_hrs <= 0 or not os.path.exists(LOG_FILE):
+        return False, 0.0
 
     eat_tz = pytz.timezone(config.TIMEZONE)
-    now_eat = datetime.now(tz=eat_tz)
-    cooldown_window = timedelta(hours=hours)
+    now = datetime.now(tz=eat_tz)
+    latest_dt = None
 
-    last_logged_at: datetime | None = None
+    try:
+        with open(LOG_FILE, newline="", encoding="utf-8") as fh:
+            reader = csv.DictReader(fh)
+            for row in reader:
+                if (row.get("pair") or "").strip() != pair:
+                    continue
+                decision = (row.get("decision") or "").strip().upper()
+                outcome = (row.get("outcome") or "").strip().upper()
+                if decision not in {"ENTER_LONG", "ENTER_SHORT"} and outcome not in {"EXECUTED", "WIN", "LOSS"}:
+                    continue
+                ts_raw = (row.get("timestamp_eat") or "").strip()
+                if not ts_raw:
+                    continue
+                try:
+                    dt = eat_tz.localize(datetime.strptime(ts_raw[:19], "%Y-%m-%d %H:%M:%S"))
+                    if latest_dt is None or dt > latest_dt:
+                        latest_dt = dt
+                except ValueError:
+                    continue
+    except OSError:
+        return False, 0.0
 
-    with open(LOG_FILE, newline="", encoding="utf-8") as fh:
-        reader = csv.DictReader(fh)
-        for row in reader:
-            if row.get("pair", "").strip() == pair:
-                ts_str = row.get("timestamp_eat", "").strip()
-                if ts_str:
-                    try:
-                        ts = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
-                        ts = eat_tz.localize(ts)
-                        if last_logged_at is None or ts > last_logged_at:
-                            last_logged_at = ts
-                    except ValueError:
-                        pass
+    if latest_dt is None:
+        return False, 0.0
 
-    if last_logged_at is None:
-        return False, None
+    elapsed_hrs = (now - latest_dt).total_seconds() / 3600.0
+    if elapsed_hrs < cooldown_hrs:
+        return True, round(cooldown_hrs - elapsed_hrs, 2)
+    return False, 0.0
 
-    elapsed = now_eat - last_logged_at
-    if elapsed < cooldown_window:
-        hours_remaining = round((cooldown_window - elapsed).total_seconds() / 3600, 2)
-        return True, hours_remaining
-
-    return False, None
 
 
 def check_daily_loss_limit() -> tuple[bool, int]:

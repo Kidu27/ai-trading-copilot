@@ -73,7 +73,9 @@ def analyse(
         result["passed_math_gate"] = False
         result["fail_reasons"].append("Price is not near a key S/R zone — no edge.")
 
-    # ── 3. V2 Indicators (EMA, Fibonacci, ATR) ────────────────────────────────
+    # ── 3. V2 Indicators (EMA, Fibonacci, ATR, RSI) ───────────────────────────
+    pip_size = 0.01 if "JPY" in symbol else 0.0001
+
     if config.USE_V2_INDICATORS:
         ema50  = _ema(df_1h["close"], 50)
         ema200 = _ema(df_1h["close"], 200)
@@ -82,14 +84,30 @@ def analyse(
         result["ema_signal"] = (
             "BULLISH" if ema50.iloc[-1] > ema200.iloc[-1] else "BEARISH"
         )
+        result["ema_gap_pips"] = round(abs(float(ema50.iloc[-1]) - float(ema200.iloc[-1])) / pip_size, 1)
 
         fib = _fibonacci_zones(swing_highs, swing_lows, trend)
         result["fibonacci"] = fib
+        if fib.get("available"):
+            gz_min = min(fib["golden_zone_low"], fib["golden_zone_high"]) - (2 * pip_size)
+            gz_max = max(fib["golden_zone_low"], fib["golden_zone_high"]) + (2 * pip_size)
+            result["in_fib_golden_zone"] = bool(gz_min <= current_price <= gz_max)
+        else:
+            result["in_fib_golden_zone"] = False
 
         atr_15m = _atr(df_15m, period=14)
         result["atr_15m"] = round(float(atr_15m.iloc[-1]), 5)
     else:
+        result["ema_gap_pips"] = 0.0
+        result["in_fib_golden_zone"] = False
         result["atr_15m"] = round(float(_atr(df_15m, period=14).iloc[-1]), 5)
+
+    # 15m RSI(14)
+    rsi_series = _rsi(df_15m["close"], period=14)
+    result["rsi_14_15m"] = round(float(rsi_series.iloc[-2] if len(rsi_series) >= 2 else 50.0), 1)
+
+    # Session Tag (EAT trading windows)
+    result["session_tag"] = _get_session_tag()
 
     # ── 4. 15m Candle Story ───────────────────────────────────────────────────
     # Always drop the live forming candle (df.iloc[-1]).
@@ -112,11 +130,12 @@ def analyse(
     )
     result.update(risk_metrics)
 
-    if risk_metrics.get("risk_reward_ratio", 0) < config.MIN_RISK_REWARD:
+    min_rr = getattr(config, "get_min_risk_reward", lambda: config.MIN_RISK_REWARD)()
+    if risk_metrics.get("risk_reward_ratio", 0) < min_rr:
         result["passed_math_gate"] = False
         result["fail_reasons"].append(
             f"R:R ratio {risk_metrics.get('risk_reward_ratio', 0):.2f} < "
-            f"minimum {config.MIN_RISK_REWARD}."
+            f"minimum {min_rr}."
         )
 
     return result
@@ -409,6 +428,41 @@ def _last_n_candles(df: pd.DataFrame, n: int = 10) -> list[dict]:
 # 5. Risk & Position Sizing
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _rsi(series: pd.Series, period: int = 14) -> pd.Series:
+    """Relative Strength Index (Wilder smoothing) — pure pandas."""
+    delta = series.diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.ewm(alpha=1 / period, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1 / period, adjust=False).mean()
+    rs = avg_gain / (avg_loss + 1e-10)
+    return 100 - (100 / (1 + rs))
+
+
+def _get_session_tag() -> str:
+    """
+    Categorise current market session in Africa/Addis_Ababa (EAT):
+      - 10:30–15:00 EAT: LONDON_OPEN
+      - 15:00–18:00 EAT: LONDON_NY_OVERLAP
+      - 18:00–19:30 EAT: NY_AFTERNOON
+      - Outside: OFF_HOURS
+    """
+    try:
+        import pytz
+        from datetime import datetime, time as dtime
+        eat_tz = pytz.timezone(config.TIMEZONE)
+        now = datetime.now(tz=eat_tz).time()
+        if dtime(10, 30) <= now < dtime(15, 0):
+            return "LONDON_OPEN"
+        elif dtime(15, 0) <= now < dtime(18, 0):
+            return "LONDON_NY_OVERLAP"
+        elif dtime(18, 0) <= now <= dtime(19, 30):
+            return "NY_AFTERNOON"
+        return "OFF_HOURS"
+    except Exception:
+        return "LONDON_OPEN"
+
+
 def _calculate_risk(
     symbol: str,
     trend: str,
@@ -420,7 +474,8 @@ def _calculate_risk(
     """
     Calculate stop-loss, take-profit, R:R ratio, and position size.
 
-    Stop-Loss:  placed just outside the S/R zone + 0.5 * ATR + 0.0002 (2-pip spread cushion).
+    Stop-Loss:  placed just outside the S/R zone + 0.5 * ATR + 2-pip spread cushion
+                (0.0002 for standard pairs, 0.02 for JPY pairs).
     Take-Profit: placed just before the opposing S/R zone.
 
     Position size expressed in:
@@ -431,9 +486,10 @@ def _calculate_risk(
 
     Returns dict with all risk metrics.
     """
+    pip_size = 0.01 if "JPY" in symbol else 0.0001
     max_risk_usd = round(config.ACCOUNT_BALANCE * config.MAX_RISK_PERCENT, 2)
     # ── SPREAD CUSHION: 0.5 × ATR + 2-pip spread buffer ──────────────────────
-    atr_buffer   = 0.5 * atr + 0.0002
+    atr_buffer   = 0.5 * atr + (2 * pip_size)
 
     out: dict[str, Any] = {
         "account_balance": config.ACCOUNT_BALANCE,
@@ -446,7 +502,7 @@ def _calculate_risk(
         entry       = current_price
         stop_loss   = nearest_support["zone_low"] - atr_buffer
         take_profit = (
-            nearest_resistance["price"] * 0.9998  # just below resistance
+            nearest_resistance["price"] - (2 * pip_size)
             if nearest_resistance
             else entry + 3 * (entry - stop_loss)  # fallback: 1:3 R:R
         )
@@ -457,7 +513,7 @@ def _calculate_risk(
         entry       = current_price
         stop_loss   = nearest_resistance["zone_high"] + atr_buffer
         take_profit = (
-            nearest_support["price"] * 1.0002  # just above support
+            nearest_support["price"] + (2 * pip_size)
             if nearest_support
             else entry - 3 * (stop_loss - entry)  # fallback: 1:3 R:R
         )
@@ -492,10 +548,9 @@ def _calculate_risk(
     rr_ratio    = reward_pips / risk_pips
 
     # ── Position sizing ───────────────────────────────────────────────────────
-    # 1 pip = 0.0001 for major pairs; $10 per standard lot per pip
-    # Risk USD = pips_at_risk × pip_value_per_lot × lots
-    pip_value_per_standard_lot = 10.0            # USD per pip, 1 std lot (100k units)
-    pips_at_risk    = risk_pips / 0.0001         # convert price units → pips
+    # Standard lot pip value: ~$10 per pip for 100k units
+    pip_value_per_standard_lot = 10.0
+    pips_at_risk    = risk_pips / pip_size
     position_size_units = max_risk_usd / (pips_at_risk * pip_value_per_standard_lot) * 100_000
 
     # Standard Lots: used directly in MT5 (minimum 0.01)
@@ -508,8 +563,8 @@ def _calculate_risk(
         "entry_price":              round(entry,       5),
         "stop_loss":                round(stop_loss,   5),
         "take_profit":              round(take_profit, 5),
-        "risk_pips":                round(risk_pips / 0.0001,   1),
-        "reward_pips":              round(reward_pips / 0.0001, 1),
+        "risk_pips":                round(risk_pips / pip_size,   1),
+        "reward_pips":              round(reward_pips / pip_size, 1),
         "risk_reward_ratio":        round(rr_ratio, 2),
         "position_size_lots":       std_lots,            # Standard Lots → MT5 orders
         "position_size_micro_lots": micro_lots,          # Micro Lots → informational

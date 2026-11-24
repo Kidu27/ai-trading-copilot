@@ -25,6 +25,7 @@ import pytz
 import requests
 
 import config
+import pattern_stats
 
 # ── Pending signals store ──────────────────────────────────────────────────────
 PENDING_SIGNALS_FILE = os.path.join(os.path.dirname(__file__), "pending_signals.json")
@@ -53,6 +54,17 @@ def send_alert(
     if decision in ("ENTER_LONG", "ENTER_SHORT"):
         signal = _build_signal(symbol, math_result, ai_result)
         _save_pending_signal(signal)
+        # Record indicator fingerprint in pattern_history.json
+        pattern_stats.record_fingerprint(
+            signal_id=signal["signal_id"],
+            pair=symbol,
+            direction=signal["direction"],
+            math_result=math_result,
+            ai_result=ai_result,
+            news_bias=ai_result.get("news_bias", "NEUTRAL"),
+            outcome="PENDING",
+            pnl_usd=0.0,
+        )
         card = _format_card(symbol, math_result, ai_result, signal_id=signal["signal_id"])
         if config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID:
             _send_telegram_with_buttons(card, signal["signal_id"])
@@ -164,7 +176,12 @@ def _format_card(
     }.get(decision, "⚫ NO TRADE")
 
     score_bar = _score_bar(score)
-    demo_tag  = " [DEMO]" if config.DEMO_MODE else ""
+    if config.DEMO_MODE and getattr(config, "DEMO_DISCOVERY_MODE", False):
+        demo_tag = " [DEMO DISCOVERY]"
+    elif config.DEMO_MODE:
+        demo_tag = " [DEMO]"
+    else:
+        demo_tag = ""
 
     lines = [
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
@@ -175,8 +192,12 @@ def _format_card(
         f"🎯 Score   : {score}/100  {score_bar}",
         f"📈 Trend   : {trend}",
         f"💰 Price   : {math_result.get('current_price', '?')}",
-        "",
     ]
+
+    news_bias = ai_result.get("news_bias")
+    if news_bias and news_bias != "NEUTRAL":
+        lines.append(f"📰 News    : {news_bias} bias")
+    lines.append("")
 
     if decision != "NO_TRADE" and trade_plan.get("entry"):
         std_lots   = math_result.get("position_size_lots",       trade_plan.get("lots", "?"))
@@ -363,6 +384,18 @@ def _format_post_mortem_card(report: dict[str, Any]) -> str:
     if signal_id:
         lines.append(f"🔑 ID       : {signal_id[:8]}…")
 
+    # Fetch Winning DNA and Readiness Metrics from pattern_stats
+    try:
+        win_dna = pattern_stats.get_win_signature_summary()
+    except Exception:
+        win_dna = "Collecting trade data for empirical pattern synthesis."
+
+    try:
+        readiness = pattern_stats.get_readiness_metrics()
+        readiness_text = readiness.get("summary_text", "")
+    except Exception:
+        readiness_text = "Readiness: Gathering closed trade statistics."
+
     lines += [
         "",
         "── ROOT CAUSE ANALYSIS ──────",
@@ -373,6 +406,12 @@ def _format_post_mortem_card(report: dict[str, Any]) -> str:
         "",
         "── ACTIONABLE LESSON ────────",
         f"💡 {lesson}",
+        "",
+        "── WINNING DNA SIGNATURE ────",
+        win_dna,
+        "",
+        "── 30-TRADE READINESS METER ─",
+        readiness_text,
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
         "🧠 Saved to rolling memory (last 10 lessons applied to future audits).",
     ]

@@ -1,0 +1,40 @@
+name: Forex Scanner
+
+on:
+  schedule:
+    # Run every 15 minutes between 07:00 and 16:45 UTC, Monday through Friday
+    # (Matches London & NY sessions: 10:30 - 19:30 Africa/Addis_Ababa / EAT)
+    - cron: '*/15 7-16 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  scan:
+    name: 15m Market Scanner
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Market Scan
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          ACCOUNT_BALANCE: ${{ secrets.ACCOUNT_BALANCE || '1000.0' }}
+          DEMO_MODE: "True"
+          DEMO_DISCOVERY_MODE: "True"
+        run: |
+          python main.py

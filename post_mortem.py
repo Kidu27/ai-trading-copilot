@@ -26,6 +26,7 @@ import config
 import notifier
 import journal
 import data_fetcher
+import pattern_stats
 
 # Official Google GenAI SDK
 try:
@@ -363,10 +364,20 @@ def check_closed_trades(mock_candles: pd.DataFrame | None = None) -> list[dict[s
             }
             save_lesson(lesson_entry)
 
-            # 3. Send Telegram card
+            # 3. Update pattern_history.json with final outcome & PnL
+            try:
+                pattern_stats.update_outcome(
+                    signal_id=sig_id,
+                    outcome=outcome,
+                    pnl_usd=float(pnl_usd),
+                )
+            except Exception as exc:
+                print(f"  [post_mortem] Warning: failed to update pattern_history: {exc}")
+
+            # 4. Send Telegram card (including Winning DNA & 30-Trade Readiness Meter)
             notifier.send_post_mortem(report)
 
-            # 4. Mark post_mortem_done
+            # 5. Mark post_mortem_done
             trade["post_mortem_done"] = True
             reports.append(report)
 

@@ -147,7 +147,7 @@ def run_mock_tests(
     _header(f"🧪 MOCK TEST RUN — regime: {regime.upper()}")
 
     # ── Test imports ──────────────────────────────────────────────────────────
-    print("\n[1/8] Testing imports …")
+    print("\n[1/10] Testing imports …")
     try:
         import data_fetcher
         import market_math
@@ -157,12 +157,14 @@ def run_mock_tests(
         import broker_executor
         import telegram_listener
         import post_mortem
+        import pattern_stats
+        import news_fetcher
         _ok("All modules imported successfully.")
     except ImportError as exc:
         _fail("Import error", str(exc))
 
     # ── Test mock data generation ─────────────────────────────────────────────
-    print("\n[2/8] Generating mock data …")
+    print("\n[2/10] Generating mock data …")
     df_1h, df_15m = data_fetcher.generate_mock_data(regime=regime, seed=42)
     _check(len(df_1h) == 100,  "df_1h has 100 rows",  str(len(df_1h)))
     _check(len(df_15m) == 50,  "df_15m has 50 rows",  str(len(df_15m)))
@@ -173,7 +175,7 @@ def run_mock_tests(
     print(f"     Price range 1H: {df_1h['close'].min():.5f} → {df_1h['close'].max():.5f}")
 
     # ── Test market math ──────────────────────────────────────────────────────
-    print("\n[3/8] Running market_math.analyse() …")
+    print("\n[3/10] Running market_math.analyse() …")
     result = market_math.analyse("EUR/USD (MOCK)", df_1h, df_15m)
 
     _check("trend_1h" in result,          "trend_1h key present", f"→ {result['trend_1h']}")
@@ -191,6 +193,10 @@ def run_mock_tests(
            f"→ {result.get('position_size_lots')} std lots")
     _check("position_size_micro_lots" in result, "position_size_micro_lots present",
            f"→ {result.get('position_size_micro_lots')} µlots")
+    _check("rsi_14_15m" in result,        "rsi_14_15m computed",  f"→ {result.get('rsi_14_15m')}")
+    _check("ema_gap_pips" in result,      "ema_gap_pips computed", f"→ {result.get('ema_gap_pips')}")
+    _check("in_fib_golden_zone" in result, "in_fib_golden_zone computed", f"→ {result.get('in_fib_golden_zone')}")
+    _check("session_tag" in result,       "session_tag computed", f"→ {result.get('session_tag')}")
 
     if regime == "ranging":
         _check(
@@ -215,14 +221,14 @@ def run_mock_tests(
             )
 
     # ── Test candle analysis ───────────────────────────────────────────────────
-    print("\n[4/8] Verifying 15m candle story …")
+    print("\n[4/10] Verifying 15m candle story …")
     story = result["candle_story"]
     _check(story.get("available", False), "Candle story is available")
     _check("pattern" in story,            "Pattern detected",  f"→ {story.get('pattern')}")
     _check("body_pct" in story,           "body_pct computed", f"→ {story.get('body_pct')}")
 
     # ── Test CSV logging ───────────────────────────────────────────────────────
-    print("\n[5/8] Testing journal.log_setup() …")
+    print("\n[5/10] Testing journal.log_setup() …")
 
     original_log = journal.LOG_FILE
     journal.LOG_FILE = "/tmp/test_trades_log.csv"
@@ -253,7 +259,7 @@ def run_mock_tests(
     journal.LOG_FILE = original_log
 
     # ── Test MockDemoExecutor ─────────────────────────────────────────────────
-    print("\n[6/8] Testing MockDemoExecutor …")
+    print("\n[6/10] Testing MockDemoExecutor …")
     _check(config.DEMO_MODE, "DEMO_MODE is True (safe)")
 
     executor = broker_executor.get_executor()
@@ -278,7 +284,7 @@ def run_mock_tests(
             json.dump(trades, fh, indent=2)
 
     # ── Test notifier (Telegram card with buttons / console fallback) ──────────
-    print("\n[7/8] Testing notifier (interactive Telegram card) …")
+    print("\n[7/10] Testing notifier (interactive Telegram card) …")
 
     demo_math, demo_ai = _build_mock_approved_signal(result, regime)
 
@@ -322,7 +328,7 @@ def run_mock_tests(
                   "TELEGRAM_CHAT_ID are not set in .env. Add them and retry.")
 
     # ── Test Post-Mortem & Rolling Memory Loop ────────────────────────────────
-    print("\n[8/8] Testing post-mortem & rolling memory loop …")
+    print("\n[8/10] Testing post-mortem & rolling memory loop …")
     import post_mortem
 
     # Run simulated trade close at Stop-Loss
@@ -359,6 +365,34 @@ def run_mock_tests(
         print(f"  💡 {pm_report.get('actionable_lesson')}")
         print(f"\n  🧠 Memory store: lessons_learned.json has {len(lessons)} rolling lesson(s).")
         print(f"  ✅ Future AI auditor checks will now automatically enforce this lesson.")
+
+    # ── Test Pattern Stats & Winning DNA ──────────────────────────────────────
+    print("\n[9/10] Testing pattern_stats & win signature fingerprinting …")
+    import pattern_stats
+    pattern_stats.record_fingerprint(
+        signal_id="mock_sig_123",
+        pair="EUR/USD",
+        direction="ENTER_LONG",
+        math_result=result,
+        ai_result=demo_ai,
+        news_bias="NEUTRAL",
+        outcome="WIN",
+        pnl_usd=25.0,
+    )
+    pattern_stats.update_outcome("mock_sig_123", outcome="WIN", pnl_usd=25.0)
+    dna_summary = pattern_stats.get_win_signature_summary()
+    _check(isinstance(dna_summary, str), "get_win_signature_summary() returns str")
+    readiness = pattern_stats.get_readiness_metrics()
+    _check("sample_size" in readiness, "get_readiness_metrics() contains sample_size")
+    _check("win_rate_pct" in readiness, "get_readiness_metrics() contains win_rate_pct")
+    _ok("Pattern Stats", f"→ Sample size: {readiness['sample_size']}, Win rate: {readiness['win_rate_pct']}%")
+
+    # ── Test FXStreet News Bias Engine ─────────────────────────────────────────
+    print("\n[10/10] Testing news_fetcher (FXStreet RSS & Sentiment) …")
+    import news_fetcher
+    eur_news = news_fetcher.get_pair_news_bias("EUR/USD")
+    _check("bias" in eur_news, "get_pair_news_bias() returns bias", f"→ {eur_news['bias']}")
+    _check("headlines" in eur_news, "get_pair_news_bias() returns headlines list")
 
     # ── Summary ───────────────────────────────────────────────────────────────
     _header("✅ ALL MOCK TESTS PASSED")

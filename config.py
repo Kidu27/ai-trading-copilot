@@ -20,26 +20,44 @@ TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID: str = os.getenv("TELEGRAM_CHAT_ID", "")
 
 # ── Account & Risk ─────────────────────────────────────────────────────────────
-ACCOUNT_BALANCE: float = float(os.getenv("ACCOUNT_BALANCE", "500"))
+ACCOUNT_BALANCE: float = float(os.getenv("ACCOUNT_BALANCE", "1000.0"))
 MAX_RISK_PERCENT: float = float(os.getenv("MAX_RISK_PERCENT", "0.01"))
 
-# ── Watchlist ──────────────────────────────────────────────────────────────────
-WATCHLIST: list[str] = ["EUR/USD", "GBP/USD"]
+# ── Watchlist (7 Liquid Major & Cross Pairs) ──────────────────────────────────
+# 7 pairs × 36 15m cycles/day × 2 credits = 504 credits/day (safely within 800/day limit)
+PAIRS: list[str] = [
+    "EUR/USD",
+    "GBP/USD",
+    "USD/JPY",
+    "USD/CHF",
+    "AUD/USD",
+    "EUR/JPY",
+    "GBP/JPY",
+]
+WATCHLIST: list[str] = PAIRS  # Alias for backward compatibility
 
 # ── Timezone & Session Windows ─────────────────────────────────────────────────
 TIMEZONE: str = "Africa/Addis_Ababa"          # EAT — UTC+3
 LONDON_SESSION_START: str = "10:30"            # 07:30 UTC = 10:30 EAT
 LONDON_SESSION_END: str   = "19:30"            # 16:30 UTC = 19:30 EAT
+SCAN_INTERVAL_MINUTES: int = 15                # Scan every 15 minutes during session
+PAIR_REQUEST_DELAY_SECONDS: int = 10           # 10s delay between pairs (stays under 8 req/min)
+
+# ── Demo / Live Mode & Opportunity Discovery ───────────────────────────────────
+DEMO_MODE: bool = True                         # True = paper-trading / simulation only
+DEMO_DISCOVERY_MODE: bool = True               # Relax threshold in demo to study setups
 
 # ── Trade Quality Thresholds ───────────────────────────────────────────────────
-MIN_RISK_REWARD: float = 2.0        # Minimum acceptable R:R ratio
-MIN_CONFLUENCE_SCORE: int = 80      # AI auditor must score >= 80 to signal trade
+# In Demo Discovery Mode, relax thresholds to 65 confluence score and 1.4 R:R
+# so Gemini acts as an active opportunity scout while hard SL and 1% risk remain strictly enforced.
+def get_min_risk_reward() -> float:
+    return 1.4 if (DEMO_MODE and DEMO_DISCOVERY_MODE) else 2.0
 
-# ── Safety Circuit Breaker ─────────────────────────────────────────────────────
-MAX_DAILY_LOSSES: int = 2           # Stop all alerts after N losing trades today
+def get_min_confluence_score() -> int:
+    return 65 if (DEMO_MODE and DEMO_DISCOVERY_MODE) else 80
 
-# ── Demo / Live Mode ───────────────────────────────────────────────────────────
-DEMO_MODE: bool = True              # True = paper-trading / simulation only
+MIN_RISK_REWARD: float = get_min_risk_reward()
+MIN_CONFLUENCE_SCORE: int = get_min_confluence_score()
 
 # ── Feature Flags ──────────────────────────────────────────────────────────────
 USE_V2_INDICATORS: bool = True      # Enable EMA 50/200, Fibonacci Golden Zone, ATR
@@ -61,3 +79,6 @@ SIGNAL_EXPIRY_MINUTES: int = 5      # Telegram approval buttons expire after N m
 # Leave empty ("") to use MockDemoExecutor instead.
 MT5_FILES_DIR: str = os.getenv("MT5_FILES_DIR", "")
 
+# ── Restored Compatibility Guardrails ──
+MAX_DAILY_LOSSES = 3
+PAIR_COOLDOWN_HOURS = 1

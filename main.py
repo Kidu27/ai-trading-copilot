@@ -31,6 +31,7 @@ import market_math
 import ai_auditor
 import notifier
 import journal
+import post_mortem
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -94,17 +95,7 @@ def run_scan() -> None:
         return
 
     # ── Scan each pair ────────────────────────────────────────────────────────
-    for symbol in config.WATCHLIST:
-        print(f"\n── Analysing {symbol} ─────────────────────────────────")
-
-        # ── Pair cooldown guard (4-hour deduplication) ────────────────────────
-        on_cooldown, hours_left = journal.check_pair_cooldown(symbol, hours=4)
-        if on_cooldown:
-            print(
-                f"  ⏳ {symbol} is on cooldown — last alert was < 4 hours ago. "
-                f"({hours_left}h remaining). Skipping."
-            )
-            continue
+    for idx, symbol in enumerate(config.WATCHLIST):
         print(f"\n── Analysing {symbol} ─────────────────────────────────")
 
         # ── Pair cooldown guard (4-hour deduplication) ────────────────────────
@@ -155,6 +146,18 @@ def run_scan() -> None:
 
         # Only send alert for actionable signals OR always for NO_TRADE (transparency)
         notifier.send_alert(symbol, math_result, ai_result)
+
+        # Delay between pairs to respect API credit limits
+        if idx < len(config.WATCHLIST) - 1 and getattr(config, "PAIR_REQUEST_DELAY_SECONDS", 0) > 0:
+            delay = config.PAIR_REQUEST_DELAY_SECONDS
+            print(f"  ⏳ Pausing {delay}s before next pair to stay within API rate limit …")
+            time.sleep(delay)
+
+    # ── Check for any closed trades and run post-mortem ──────────────────────
+    try:
+        post_mortem.check_closed_trades()
+    except Exception as exc:
+        print(f"  [main] Post-mortem check error: {exc}")
 
     print(f"\n{'='*55}")
     print(f"  ✅ Scan complete.")
