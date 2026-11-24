@@ -196,7 +196,12 @@ def analyze_trade_with_ai(
 
     if _GENAI_AVAILABLE and config.GEMINI_API_KEY:
         try:
-            client = genai.Client(api_key=config.GEMINI_API_KEY)
+            http_opts = (
+                types.HttpOptions(timeout=15000, retry_options=types.HttpRetryOptions(attempts=1))
+                if hasattr(types, "HttpOptions") and hasattr(types, "HttpRetryOptions")
+                else None
+            )
+            client = genai.Client(api_key=config.GEMINI_API_KEY, http_options=http_opts) if http_opts else genai.Client(api_key=config.GEMINI_API_KEY)
             gen_kwargs: dict[str, Any] = {
                 "system_instruction": _POST_MORTEM_SYSTEM_PROMPT,
                 "response_mime_type": "application/json",
@@ -207,10 +212,10 @@ def analyze_trade_with_ai(
                 gen_kwargs["response_schema"] = PostMortemAnalysis
 
             fallback_models = [
-                "gemini-3.8-flash",
-                "gemini-3.6-flash",
-                "gemini-3.1-flash-lite",
                 "gemini-3.5-flash-lite",
+                "gemini-3.8-flash",
+                "gemma-4-31b-it",
+                "gemma-4-26b-a4b-it",
             ]
             response = None
             last_err = None

@@ -86,6 +86,53 @@ def send_alert(
     """
     decision = ai_result.get("decision", "NO_TRADE")
 
+    # Math-approved zero-loss fail-safe: if AI was busy/failed but math gate passed with valid plan
+    if decision == "NO_TRADE" and ai_result.get("_fail_safe") and math_result.get("passed_math_gate"):
+        math_dir = str(math_result.get("direction", "LONG")).upper()
+        direction = "ENTER_LONG" if "LONG" in math_dir else "ENTER_SHORT"
+
+        fallback_ai = dict(ai_result)
+        fallback_ai["decision"] = direction
+        fallback_ai["confluence_score"] = 65
+        fallback_ai["_math_approved_fallback"] = True
+
+        signal = _build_signal(symbol, math_result, fallback_ai)
+        signal["direction"] = direction
+        signal["confluence_score"] = 65
+        _save_pending_signal(signal)
+
+        _print_ticket_box(
+            symbol=symbol,
+            direction=signal["direction"],
+            score=signal.get("confluence_score", 65),
+            entry=signal.get("entry"),
+            stop_loss=signal.get("stop_loss"),
+            take_profit=signal.get("take_profit"),
+            std_lots=signal.get("standard_lots", 0.01),
+            units=signal.get("units", 1000),
+            risk_reward=math_result.get("risk_reward_ratio"),
+            risk_usd=math_result.get("max_risk_usd"),
+            signal_id=signal["signal_id"],
+        )
+
+        pattern_stats.record_fingerprint(
+            signal_id=signal["signal_id"],
+            pair=symbol,
+            direction=signal["direction"],
+            math_result=math_result,
+            ai_result=fallback_ai,
+            news_bias=fallback_ai.get("news_bias", "NEUTRAL"),
+            outcome="PENDING",
+            pnl_usd=0.0,
+        )
+
+        card = _format_card(symbol, math_result, fallback_ai, signal_id=signal["signal_id"])
+        if config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID:
+            _send_telegram_with_buttons(card, signal["signal_id"])
+        else:
+            _print_console(card)
+        return
+
     if decision in ("ENTER_LONG", "ENTER_SHORT"):
         signal = _build_signal(symbol, math_result, ai_result)
         _save_pending_signal(signal)
@@ -227,11 +274,16 @@ def _format_card(
     devil_risks = ai_result.get("devils_advocate_risks", [])
     checklist   = ai_result.get("checklist_audit", {})
 
-    decision_emoji = {
-        "ENTER_LONG":  "🟢 ENTER LONG",
-        "ENTER_SHORT": "🔴 ENTER SHORT",
-        "NO_TRADE":    "⚫ NO TRADE",
-    }.get(decision, "⚫ NO TRADE")
+    is_math_fallback = bool(ai_result.get("_math_approved_fallback"))
+
+    if is_math_fallback:
+        decision_emoji = "🟢 ENTER LONG (MATH)" if "LONG" in decision else "🔴 ENTER SHORT (MATH)"
+    else:
+        decision_emoji = {
+            "ENTER_LONG":  "🟢 ENTER LONG",
+            "ENTER_SHORT": "🔴 ENTER SHORT",
+            "NO_TRADE":    "⚫ NO TRADE",
+        }.get(decision, "⚫ NO TRADE")
 
     score_bar = _score_bar(score)
     if config.DEMO_MODE and getattr(config, "DEMO_DISCOVERY_MODE", False):
@@ -257,11 +309,12 @@ def _format_card(
         lines.append(f"📰 News    : {news_bias} bias")
     lines.append("")
 
-    if decision != "NO_TRADE" and trade_plan.get("entry"):
+    if (decision != "NO_TRADE" or is_math_fallback) and trade_plan.get("entry"):
         std_lots   = math_result.get("position_size_lots",       trade_plan.get("lots", "?"))
         micro_lots = math_result.get("position_size_micro_lots", "?")
+        header_text = "── MATH-APPROVED PLAN (AI BUSY) ──" if is_math_fallback else "── TRADE PLAN ─────────────────"
         lines += [
-            "── TRADE PLAN ─────────────────",
+            header_text,
             f"  Entry       : {trade_plan.get('entry', '?')}",
             f"  Stop Loss   : {trade_plan.get('stop_loss', '?')}",
             f"  Take Profit : {trade_plan.get('take_profit', '?')}",

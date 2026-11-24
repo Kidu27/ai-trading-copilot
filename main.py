@@ -152,8 +152,20 @@ def run_scan() -> None:
         # GATE 4: Log + notify
         journal.log_setup(symbol, math_result, ai_result)
 
-        # Only send alert for actionable signals OR if NOTIFY_NO_TRADE is True
-        if decision in ("ENTER_LONG", "ENTER_SHORT") or getattr(config, "NOTIFY_NO_TRADE", True):
+        # 3-tier notification filter
+        notify_mode = getattr(config, "NOTIFY_MODE", "GATE2_ONLY").upper()
+        if notify_mode == "ALL":
+            should_alert = True
+        elif notify_mode == "GATE2_ONLY":
+            should_alert = gate2_pass or decision in ("ENTER_LONG", "ENTER_SHORT")
+        elif notify_mode == "TRADES_ONLY":
+            should_alert = decision in ("ENTER_LONG", "ENTER_SHORT") or (
+                gate2_pass and bool(ai_result.get("_fail_safe"))
+            )
+        else:
+            should_alert = gate2_pass or decision in ("ENTER_LONG", "ENTER_SHORT")
+
+        if should_alert:
             notifier.send_alert(symbol, math_result, ai_result)
 
         # Delay between pairs to respect API credit limits

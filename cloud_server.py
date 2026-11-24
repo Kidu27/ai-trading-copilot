@@ -421,7 +421,7 @@ async def telegram_webhook(request: Request) -> dict[str, str]:
             cmd = text.split()[0].split("@")[0].lower() if text else ""
             if cmd in ("/status", "/health", "/ping"):
                 mode = "DEMO_DISCOVERY" if getattr(config, "DEMO_DISCOVERY_MODE", False) else ("DEMO" if config.DEMO_MODE else "LIVE")
-                notify_state = "VERBOSE — all scans" if getattr(config, "NOTIFY_NO_TRADE", True) else "QUIET — >=65 setups only"
+                notify_state = getattr(config, "NOTIFY_MODE", "GATE2_ONLY")
                 watchlist_str = ", ".join(config.WATCHLIST)
                 status_msg = (
                     "🟢 CO-PILOT SYSTEM STATUS\n"
@@ -450,12 +450,18 @@ async def telegram_webhook(request: Request) -> dict[str, str]:
                 _send_telegram_text(stats_msg)
             elif cmd == "/open":
                 _send_open_trades_to_telegram()
-            elif cmd == "/quiet":
-                config.NOTIFY_NO_TRADE = False
-                _send_telegram_text("🤫 Quiet Mode Enabled: NO_TRADE cards silenced. Only actionable setups (confluence >= 65) will alert.")
-            elif cmd == "/verbose":
+            elif cmd == "/gate2":
+                config.NOTIFY_MODE = "GATE2_ONLY"
                 config.NOTIFY_NO_TRADE = True
-                _send_telegram_text("📢 Verbose Mode Enabled: All scan evaluations (including NO_TRADE cards) will be delivered.")
+                _send_telegram_text("🎯 Gate 2 Mode Enabled: Only setups passing Gate 2 math (both >=65 signals and Gemini rejections) will alert on Telegram.")
+            elif cmd == "/quiet":
+                config.NOTIFY_MODE = "TRADES_ONLY"
+                config.NOTIFY_NO_TRADE = False
+                _send_telegram_text("🤫 Quiet Mode Enabled: Only actionable setups (confluence >= 65) will alert.")
+            elif cmd == "/verbose":
+                config.NOTIFY_MODE = "ALL"
+                config.NOTIFY_NO_TRADE = True
+                _send_telegram_text("📢 Verbose Mode Enabled: All 7 pairs (including Gate 2 math failures) will alert.")
             elif cmd in ("/backup", "/export"):
                 _send_telegram_text("📦 Dispatching end-of-session backup & memory sync to GitHub...")
                 threading.Thread(target=_execute_backup_task, daemon=True).start()
@@ -467,8 +473,9 @@ async def telegram_webhook(request: Request) -> dict[str, str]:
                     "/scan    - Trigger immediate 7-pair market scan\n"
                     "/open    - List open trades with WIN/LOSS buttons\n"
                     "/stats   - Readiness metrics & winning DNA\n"
-                    "/quiet   - Silence NO_TRADE cards (actionable only)\n"
-                    "/verbose - Send all scan cards (including NO_TRADE)\n"
+                    "/gate2   - Alert setups passing Gate 2 math (default)\n"
+                    "/quiet   - Only actionable setups (confluence >= 65)\n"
+                    "/verbose - Alert all 7 pairs including math failures\n"
                     "/backup  - Send daily report, files & sync GitHub\n"
                     "/help    - Show this commands list\n"
                     "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

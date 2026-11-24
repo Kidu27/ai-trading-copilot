@@ -63,7 +63,7 @@ MIN_CONFLUENCE_SCORE: int = get_min_confluence_score()
 USE_V2_INDICATORS: bool = True      # Enable EMA 50/200, Fibonacci Golden Zone, ATR
 
 # ── AI Model ──────────────────────────────────────────────────────────────────
-GEMINI_MODEL: str = "gemini-3.8-flash"
+GEMINI_MODEL: str = "gemini-3.5-flash-lite"
 
 # ── Twelve Data ───────────────────────────────────────────────────────────────
 TD_BASE_URL: str = "https://api.twelvedata.com"
@@ -73,6 +73,7 @@ TD_15M_CANDLES: int = 50            # How many 15m candles to fetch
 # ── Signal Approval & Expiry ──────────────────────────────────────────────────
 SIGNAL_EXPIRY_MINUTES: int = 15     # Telegram approval buttons expire after N minutes
 NOTIFY_NO_TRADE: bool = True        # True = send NO_TRADE cards to Telegram; False = quiet mode (actionable only)
+NOTIFY_MODE: str = "GATE2_ONLY"     # Supported: "ALL", "GATE2_ONLY", "TRADES_ONLY"
 
 # ── MetaTrader 5 macOS File-Bridge (optional) ──────────────────────────────────
 # Set to the absolute path of MetaTrader 5's MQL5/Files directory on macOS,
