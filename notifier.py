@@ -35,6 +35,40 @@ PENDING_SIGNALS_FILE = os.path.join(os.path.dirname(__file__), "pending_signals.
 # Public entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _print_ticket_box(
+    symbol: str,
+    direction: str,
+    score: int,
+    entry: float | None,
+    stop_loss: float | None,
+    take_profit: float | None,
+    std_lots: float,
+    units: int,
+    risk_reward: float | None,
+    risk_usd: float | None,
+    signal_id: str,
+) -> None:
+    """Print a clearly labeled multi-line ticket box to the terminal so logs are never unlabeled numbers."""
+    rr_str = f"1 : {risk_reward:.2f}" if risk_reward is not None else "N/A"
+    risk_str = f"${risk_usd:.2f}" if risk_usd is not None else "N/A"
+    print(
+        f"\n┌────────────────────────────────────────────────────────┐\n"
+        f"│               📋 ACTIONABLE TRADE TICKET               │\n"
+        f"├────────────────────────────────────────────────────────┤\n"
+        f"│  📌 Pair         : {symbol:<35}│\n"
+        f"│  📊 Direction    : {direction:<35}│\n"
+        f"│  🎯 Score        : {f'{score}/100':<35}│\n"
+        f"│  💵 Entry        : {str(entry):<35}│\n"
+        f"│  🛑 Stop-Loss    : {str(stop_loss):<35}│\n"
+        f"│  🎯 Take-Profit  : {str(take_profit):<35}│\n"
+        f"│  📦 Volume (Lots): {f'{std_lots} std ({units:,} units)':<35}│\n"
+        f"│  ⚖️  R:R Ratio    : {rr_str:<35}│\n"
+        f"│  🛡️  Risk (USD)   : {risk_str:<35}│\n"
+        f"│  🔑 Signal ID    : {signal_id[:8]}...{'':<28}│\n"
+        f"└────────────────────────────────────────────────────────┘\n"
+    )
+
+
 def send_alert(
     symbol: str,
     math_result: dict[str, Any],
@@ -54,6 +88,23 @@ def send_alert(
     if decision in ("ENTER_LONG", "ENTER_SHORT"):
         signal = _build_signal(symbol, math_result, ai_result)
         _save_pending_signal(signal)
+
+        # Print clearly labeled multi-line ticket box to terminal so logs are never unlabeled numbers
+        trade_plan = ai_result.get("trade_plan", {})
+        _print_ticket_box(
+            symbol=symbol,
+            direction=signal["direction"],
+            score=signal.get("confluence_score", 0),
+            entry=signal.get("entry"),
+            stop_loss=signal.get("stop_loss"),
+            take_profit=signal.get("take_profit"),
+            std_lots=signal.get("standard_lots", 0.01),
+            units=signal.get("units", 1000),
+            risk_reward=trade_plan.get("risk_reward") or math_result.get("risk_reward_ratio"),
+            risk_usd=trade_plan.get("risk_usd") or math_result.get("max_risk_usd"),
+            signal_id=signal["signal_id"],
+        )
+
         # Record indicator fingerprint in pattern_history.json
         pattern_stats.record_fingerprint(
             signal_id=signal["signal_id"],
@@ -100,8 +151,12 @@ def _build_signal(
     )
     units = math_result.get("position_size_units") or int(standard_lots * 100_000)
 
+    # Use signal_id attached by main.py, or generate new UUID if absent
+    signal_id = math_result.get("signal_id") or str(uuid.uuid4())
+    math_result["signal_id"] = signal_id
+
     return {
-        "signal_id":       str(uuid.uuid4()),
+        "signal_id":       signal_id,
         "timestamp_eat":   now_eat.strftime("%Y-%m-%d %H:%M:%S"),
         "timestamp_iso":   now_eat.isoformat(),
         "pair":            symbol,
@@ -417,3 +472,11 @@ def _format_post_mortem_card(report: dict[str, Any]) -> str:
     ]
 
     return "\n".join(lines)
+
+
+def send_outcome_update(card: str) -> None:
+    """Send an automated candle outcome or shadow trade card via Telegram (or print to console)."""
+    if config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID:
+        _send_telegram(card)
+    else:
+        _print_console(card)

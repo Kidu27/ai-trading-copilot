@@ -115,14 +115,21 @@ def run_scheduler() -> None:
             except Exception as exc:
                 print(f"  ❌ Error during closed trades check: {exc}")
 
-            # 3. Service any interactive Telegram taps for 45 seconds
+            # 3. Track candle outcomes for open/missed signals
+            try:
+                import outcome_tracker
+                outcome_tracker.check_open_signal_outcomes()
+            except Exception as exc:
+                print(f"  ❌ Error during outcome tracker check: {exc}")
+
+            # 4. Service any interactive Telegram taps for 45 seconds
             if config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID:
                 try:
                     telegram_listener.listen(timeout_seconds=45)
                 except Exception as exc:
                     print(f"  ⚠️ Telegram listener error: {exc}")
 
-            # 4. Wait for next 15-minute slot
+            # 5. Wait for next 15-minute slot
             interval_secs = config.SCAN_INTERVAL_MINUTES * 60
             elapsed = time.monotonic() - cycle_start
             remaining_sleep = max(10.0, interval_secs - elapsed)

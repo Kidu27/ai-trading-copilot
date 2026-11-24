@@ -159,6 +159,7 @@ def run_mock_tests(
         import post_mortem
         import pattern_stats
         import news_fetcher
+        import outcome_tracker
         _ok("All modules imported successfully.")
     except ImportError as exc:
         _fail("Import error", str(exc))

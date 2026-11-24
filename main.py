@@ -118,6 +118,11 @@ def run_scan() -> None:
         print(f"  [Gate 2] Running market math …")
         math_result = market_math.analyse(symbol, df_1h, df_15m)
 
+        # Attach unique signal_id to math_result BEFORE journal.log_setup() so trades_log.csv has it
+        import uuid
+        signal_id = str(uuid.uuid4())
+        math_result["signal_id"] = signal_id
+
         gate2_pass = math_result["passed_math_gate"]
         print(f"  [Gate 2] Trend: {math_result['trend_1h']} | "
               f"R:R: {math_result.get('risk_reward_ratio', 'N/A')} | "
@@ -158,6 +163,13 @@ def run_scan() -> None:
         post_mortem.check_closed_trades()
     except Exception as exc:
         print(f"  [main] Post-mortem check error: {exc}")
+
+    # ── Automatic Candle Outcome Tracker for Open & Missed Signals ───────────
+    try:
+        import outcome_tracker
+        outcome_tracker.check_open_signal_outcomes()
+    except Exception as exc:
+        print(f"  [main] Outcome tracker error: {exc}")
 
     print(f"\n{'='*55}")
     print(f"  ✅ Scan complete.")

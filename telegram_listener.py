@@ -78,19 +78,69 @@ def _answer_callback(callback_query_id: str, text: str = "", alert: bool = False
         print(f"  [listener] answerCallbackQuery failed: {exc}")
 
 
-def _edit_message(chat_id: int | str, message_id: int, new_text: str) -> None:
+def _edit_message(
+    chat_id: int | str,
+    message_id: int,
+    new_text: str,
+    reply_markup: dict | None = None,
+) -> None:
     """Edit the original Telegram message to reflect the action taken."""
+    if reply_markup is None:
+        reply_markup = {"inline_keyboard": []}
+
+    text_to_send = new_text if ("<pre>" in new_text or "<b>" in new_text) else f"<pre>{new_text}</pre>"
     try:
         _tg_post("editMessageText", {
-            "chat_id":    chat_id,
-            "message_id": message_id,
-            "text":       f"<pre>{new_text}</pre>",
-            "parse_mode": "HTML",
-            # Remove inline keyboard after action is taken
-            "reply_markup": {"inline_keyboard": []},
+            "chat_id":      chat_id,
+            "message_id":   message_id,
+            "text":         text_to_send,
+            "parse_mode":   "HTML",
+            "reply_markup": reply_markup,
         })
     except requests.RequestException as exc:
         print(f"  [listener] editMessageText failed: {exc}")
+
+
+def _get_base_card(cq: dict[str, Any], signal: dict[str, Any]) -> str:
+    """
+    Retrieve or reconstruct the full trade card text so trade numbers
+    are NEVER deleted or overwritten on Telegram.
+    """
+    orig = cq.get("message", {}).get("text", "")
+    if orig and len(orig.strip()) > 35:
+        return orig.strip()
+
+    pair = signal.get("pair", "?")
+    direction = signal.get("direction", "?")
+    score = signal.get("confluence_score", 0)
+    entry = signal.get("entry", "?")
+    sl = signal.get("stop_loss", "?")
+    tp = signal.get("take_profit", "?")
+    lots = signal.get("standard_lots", 0.01)
+    units = signal.get("units", int(lots * 100_000))
+    risk_usd = signal.get("risk_usd", round(config.ACCOUNT_BALANCE * config.MAX_RISK_PERCENT, 2))
+    rr = signal.get("risk_reward", 2.0)
+
+    dir_emoji = "🟢 ENTER LONG" if "LONG" in direction else ("🔴 ENTER SHORT" if "SHORT" in direction else direction)
+
+    return (
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "🤖 AI FOREX CO-PILOT [DEMO DISCOVERY]\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📌 Pair    : {pair}\n"
+        f"📊 Signal  : {dir_emoji}\n"
+        f"🎯 Score   : {score}/100\n"
+        f"💰 Price   : {entry}\n\n"
+        "── TRADE PLAN ─────────────────\n"
+        f"  Entry       : {entry}\n"
+        f"  Stop Loss   : {sl}\n"
+        f"  Take Profit : {tp}\n"
+        f"  R:R Ratio   : 1 : {rr}\n"
+        f"  Risk (USD)  : ${risk_usd}\n"
+        f"  Std Lots    : {lots} lots  (MT5)\n"
+        f"  Units       : {units:,} units\n"
+        f"  Signal ID   : {signal.get('signal_id', '')[:8]}…"
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -103,26 +153,20 @@ def _handle_decline(
     chat_id: int | str,
     message_id: int,
     callback_query_id: str,
+    cq: dict[str, Any],
 ) -> None:
-    """User tapped ❌ Decline — mark signal declined, update Telegram message."""
+    """User tapped ❌ Decline — mark signal declined, update Telegram message while keeping numbers."""
     _answer_callback(callback_query_id, text="Signal declined.")
     notifier.update_signal_status(signal_id, "DECLINED")
-
-    pair      = signal.get("pair", "?")
-    direction = signal.get("direction", "?")
-    score     = signal.get("confluence_score", 0)
+    base_card = _get_base_card(cq, signal)
 
     edit_text = (
+        f"{base_card}\n\n"
         "❌ Setup Declined by User\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📌 Pair    : {pair}\n"
-        f"📊 Signal  : {direction}\n"
-        f"🎯 Score   : {score}/100\n"
-        f"🔑 ID      : {signal_id[:8]}…\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         "Declined. No order was placed."
     )
-    _edit_message(chat_id, message_id, edit_text)
+    _edit_message(chat_id, message_id, edit_text, reply_markup={"inline_keyboard": []})
     print(f"  [listener] Signal {signal_id[:8]}… DECLINED by user.")
 
 
@@ -132,16 +176,20 @@ def _handle_accept(
     chat_id: int | str,
     message_id: int,
     callback_query_id: str,
+    cq: dict[str, Any],
 ) -> None:
     """
     User tapped ✅ Accept & Enter.
 
-    1. Check signal expiry.
-    2. If expired → reject and update message.
-    3. If valid   → execute bracket order and confirm.
+    1. Preserves full trade card numbers at the top.
+    2. Checks signal expiry.
+    3. If MT5MacBridgeExecutor connected and succeeds -> confirms fill and attaches [Report WIN] / [Report LOSS].
+    4. If MT5MacBridgeExecutor fails or MT5_FILES_DIR disconnected (cloud mode) -> appends Manual MT5 Mobile Ticket
+       and attaches [Entered Manually] / [Skipped].
     """
     eat_tz  = pytz.timezone(config.TIMEZONE)
     now_eat = datetime.now(tz=eat_tz)
+    base_card = _get_base_card(cq, signal)
 
     # Parse the signal timestamp
     ts_str = signal.get("timestamp_eat", "")
@@ -154,83 +202,332 @@ def _handle_accept(
 
     pair      = signal.get("pair", "?")
     direction = signal.get("direction", "?")
-    score     = signal.get("confluence_score", 0)
     std_lots  = signal.get("standard_lots", 0.01)
     units     = signal.get("units", int(std_lots * 100_000))
+    entry     = signal.get("entry", "?")
+    sl        = signal.get("stop_loss", "?")
+    tp        = signal.get("take_profit", "?")
 
     # ── Expiry check ──────────────────────────────────────────────────────────
     if age_minutes > config.SIGNAL_EXPIRY_MINUTES:
         _answer_callback(callback_query_id, text="⚠️ Signal expired!", alert=True)
         notifier.update_signal_status(signal_id, "EXPIRED")
         edit_text = (
+            f"{base_card}\n\n"
             f"⚠️ Signal Expired (>{config.SIGNAL_EXPIRY_MINUTES} mins old) — Order Cancelled\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"📌 Pair    : {pair}\n"
-            f"📊 Signal  : {direction}\n"
-            f"🎯 Score   : {score}/100\n"
             f"⏱  Age     : {age_minutes:.1f} min  (limit: {config.SIGNAL_EXPIRY_MINUTES} min)\n"
-            f"🔑 ID      : {signal_id[:8]}…\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             "Order cancelled — price may have moved significantly."
         )
-        _edit_message(chat_id, message_id, edit_text)
+        _edit_message(chat_id, message_id, edit_text, reply_markup={"inline_keyboard": []})
         print(
             f"  [listener] Signal {signal_id[:8]}… EXPIRED "
             f"({age_minutes:.1f} min > {config.SIGNAL_EXPIRY_MINUTES} min limit)."
         )
         return
 
-    # ── Execute ───────────────────────────────────────────────────────────────
-    _answer_callback(callback_query_id, text="⚙️ Executing order…")
-    executor = broker_executor.get_executor()
-    result   = executor.execute_bracket_order(signal)
+    # ── Check if MT5 bridge is connected on disk ─────────────────────────────
+    import os
+    mt5_dir = getattr(config, "MT5_FILES_DIR", "") or os.getenv("MT5_FILES_DIR", "")
+    is_mt5_connected = bool(mt5_dir and os.path.isdir(mt5_dir))
 
-    if result["success"]:
-        notifier.update_signal_status(signal_id, "EXECUTED")
-        fill_price = result.get("fill_price", signal.get("entry", "?"))
+    if is_mt5_connected:
+        _answer_callback(callback_query_id, text="⚙️ Submitting to MT5 bridge…")
+        executor = broker_executor.get_executor()
+        result   = executor.execute_bracket_order(signal)
 
-        # Log EXECUTED row to trades_log.csv immediately via journal.py
-        try:
-            fill_price_val = result.get("fill_price") or signal.get("entry")
-            journal.log_executed_trade(
-                signal,
-                fill_price=float(fill_price_val) if fill_price_val is not None else None,
-                notes="Executed via Telegram button",
+        if result["success"]:
+            notifier.update_signal_status(signal_id, "EXECUTED")
+            fill_price = result.get("fill_price", entry)
+
+            try:
+                journal.log_executed_trade(
+                    signal,
+                    fill_price=float(fill_price) if fill_price is not None else None,
+                    notes="Executed via MT5 Bridge",
+                )
+            except Exception as exc:
+                print(f"  [listener] Warning: failed to log execution to journal: {exc}")
+
+            edit_text = (
+                f"{base_card}\n\n"
+                f"✅ ORDER EXECUTED [MT5 BRIDGE]\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"🎫 Ticket : {result.get('mt5_ticket', 'N/A')}\n"
+                f"💵 Fill   : {fill_price}\n"
+                f"📦 Volume : {std_lots} std lots ({units:,} units)\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"Position is LIVE. When it closes, tap below to report outcome:"
             )
-        except Exception as exc:
-            print(f"  [listener] Warning: failed to log execution to journal: {exc}")
+            report_markup = {
+                "inline_keyboard": [
+                    [
+                        {"text": "🏆 Report WIN", "callback_data": f"win:{signal_id}"},
+                        {"text": "❌ Report LOSS", "callback_data": f"loss:{signal_id}"},
+                    ]
+                ]
+            }
+            _edit_message(chat_id, message_id, edit_text, reply_markup=report_markup)
+            print(f"  [listener] Signal {signal_id[:8]}… EXECUTED on MT5 bridge.")
+            return
 
-        exec_tag   = "[DEMO MOCK]" if config.DEMO_MODE else "[LIVE]"
-        edit_text  = (
-            f"✅ Order Executed {exec_tag}\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"📌 Pair    : {pair}\n"
-            f"📊 Signal  : {direction}\n"
-            f"🎯 Score   : {score}/100\n"
-            f"💵 Fill    : {fill_price}\n"
-            f"🛑 SL      : {signal.get('stop_loss', '?')}\n"
-            f"🎯 TP      : {signal.get('take_profit', '?')}\n"
-            f"📦 Lots    : {std_lots} std  ({units:,} units)\n"
-            f"🔑 ID      : {signal_id[:8]}…\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            + result.get("message", "Order placed successfully.")
+    # ── Fallback: Manual MT5 Mobile Ticket ────────────────────────────────────
+    notifier.update_signal_status(signal_id, "WAITING_MANUAL")
+    _answer_callback(callback_query_id, text="📱 MT5 Bridge unavailable — manual ticket ready!", alert=False)
+
+    manual_ticket = (
+        f"{base_card}\n\n"
+        f"📱 MANUAL MT5 MOBILE TICKET\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📌 Pair        : {pair}\n"
+        f"📊 Side        : {direction}\n"
+        f"📦 Volume      : {std_lots} Lots ({units:,} units)\n"
+        f"💵 Entry Level : {entry}\n"
+        f"🛑 Stop Loss   : {sl}\n"
+        f"🎯 Take Profit : {tp}\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"ℹ️ MT5 Bridge disconnected (Cloud/Mobile Mode). Open MT5 on your phone, enter the ticket above, then tap below:"
+    )
+    manual_markup = {
+        "inline_keyboard": [
+            [
+                {"text": "✅ Entered Manually", "callback_data": f"manual:{signal_id}"},
+                {"text": "⏭️ Skipped", "callback_data": f"skip:{signal_id}"},
+            ]
+        ]
+    }
+    _edit_message(chat_id, message_id, manual_ticket, reply_markup=manual_markup)
+    print(f"  [listener] Signal {signal_id[:8]}… manual ticket presented to user.")
+
+
+def _handle_manual(
+    signal_id: str,
+    signal: dict[str, Any],
+    chat_id: int | str,
+    message_id: int,
+    callback_query_id: str,
+    cq: dict[str, Any],
+) -> None:
+    """User tapped [✅ Entered Manually]."""
+    _answer_callback(callback_query_id, text="✅ Trade recorded as manually entered!")
+    notifier.update_signal_status(signal_id, "MANUAL")
+    base_card = _get_base_card(cq, signal)
+
+    eat_tz  = pytz.timezone(config.TIMEZONE)
+    now_eat = datetime.now(tz=eat_tz)
+
+    # Log EXECUTED row to trades_log.csv
+    try:
+        journal.log_executed_trade(
+            signal,
+            fill_price=float(signal.get("entry") or 0.0),
+            notes="Manually entered on MT5 Mobile",
         )
-        print(f"  [listener] Signal {signal_id[:8]}… EXECUTED → {result.get('message')}")
+    except Exception as exc:
+        print(f"  [listener] Warning: failed to log manual trade to journal: {exc}")
+
+    # Record in active_trades.json
+    trade_record = {
+        "signal_id":     signal_id,
+        "pair":          signal.get("pair", ""),
+        "direction":     signal.get("direction", ""),
+        "entry":         signal.get("entry"),
+        "fill_price":    signal.get("entry"),
+        "stop_loss":     signal.get("stop_loss"),
+        "take_profit":   signal.get("take_profit"),
+        "standard_lots": signal.get("standard_lots", 0.01),
+        "units":         signal.get("units", 1000),
+        "mt5_ticket":    "MANUAL_ENTRY",
+        "status":        "OPEN",
+        "executor":      "manual",
+        "demo_mode":     config.DEMO_MODE,
+        "opened_eat":    now_eat.strftime("%Y-%m-%d %H:%M:%S"),
+        "closed_eat":    None,
+        "pnl_usd":       None,
+    }
+    broker_executor._append_active_trade(trade_record)
+
+    confirm_note = (
+        f"{base_card}\n\n"
+        f"✅ MANUALLY ENTERED ON MT5 MOBILE\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"Position is active. When it closes, tap below to report outcome:"
+    )
+    report_markup = {
+        "inline_keyboard": [
+            [
+                {"text": "🏆 Report WIN", "callback_data": f"win:{signal_id}"},
+                {"text": "❌ Report LOSS", "callback_data": f"loss:{signal_id}"},
+            ]
+        ]
+    }
+    _edit_message(chat_id, message_id, confirm_note, reply_markup=report_markup)
+    print(f"  [listener] Signal {signal_id[:8]}… confirmed as MANUAL trade.")
+
+
+def _handle_skip(
+    signal_id: str,
+    signal: dict[str, Any],
+    chat_id: int | str,
+    message_id: int,
+    callback_query_id: str,
+    cq: dict[str, Any],
+) -> None:
+    """User tapped [⏭️ Skipped]."""
+    _answer_callback(callback_query_id, text="Trade skipped.")
+    notifier.update_signal_status(signal_id, "SKIPPED")
+    base_card = _get_base_card(cq, signal)
+
+    eat_tz = pytz.timezone(config.TIMEZONE)
+    now_eat_str = datetime.now(tz=eat_tz).strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        journal.update_trade_outcome(
+            signal_id=signal_id,
+            exit_price=0.0,
+            exit_time=now_eat_str,
+            pnl_usd=0.0,
+            outcome="SKIPPED",
+            notes="Manual entry skipped by user",
+        )
+    except Exception:
+        pass
+
+    skip_note = f"{base_card}\n\n⏭️ Manual entry skipped by user."
+    _edit_message(chat_id, message_id, skip_note, reply_markup={"inline_keyboard": []})
+    print(f"  [listener] Signal {signal_id[:8]}… marked SKIPPED.")
+
+
+def _handle_report_outcome(
+    action: str,  # "win" | "loss"
+    signal_id: str,
+    signal: dict[str, Any],
+    chat_id: int | str,
+    message_id: int,
+    callback_query_id: str,
+    cq: dict[str, Any],
+) -> None:
+    """User tapped [🏆 Report WIN] or [❌ Report LOSS]."""
+    import pattern_stats
+    import post_mortem
+
+    outcome = "WIN" if action == "win" else "LOSS"
+    _answer_callback(callback_query_id, text=f"Recorded {outcome}! Generating diagnostic...")
+    base_card = _get_base_card(cq, signal)
+
+    eat_tz = pytz.timezone(config.TIMEZONE)
+    now_eat_str = datetime.now(tz=eat_tz).strftime("%Y-%m-%d %H:%M:%S")
+
+    pair = signal.get("pair", "UNKNOWN")
+    entry = float(signal.get("entry") or 0.0)
+    sl = float(signal.get("stop_loss") or 0.0)
+    tp = float(signal.get("take_profit") or 0.0)
+    risk_usd = float(signal.get("risk_usd") or round(config.ACCOUNT_BALANCE * config.MAX_RISK_PERCENT, 2))
+    rr = float(signal.get("risk_reward") or 2.0)
+
+    if outcome == "WIN":
+        exit_price = tp if tp > 0 else entry
+        pnl_usd = round(risk_usd * rr, 2)
     else:
-        notifier.update_signal_status(signal_id, "FAILED")
-        edit_text = (
-            f"❌ Order Execution Failed\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"📌 Pair    : {pair}\n"
-            f"📊 Signal  : {direction}\n"
-            f"🔑 ID      : {signal_id[:8]}…\n"
-            f"⚠️  Error   : {result.get('error', 'Unknown error')}\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            "No order was placed. Check broker_executor logs."
-        )
-        print(f"  [listener] Signal {signal_id[:8]}… EXECUTION FAILED: {result.get('error')}")
+        exit_price = sl if sl > 0 else entry
+        pnl_usd = -round(risk_usd, 2)
 
-    _edit_message(chat_id, message_id, edit_text)
+    pnl_sign = "+" if pnl_usd > 0 else ""
+    emoji = "🏆 WIN" if outcome == "WIN" else "❌ LOSS"
+
+    # 1. Update pending_signals.json
+    notifier.update_signal_status(signal_id, f"CLOSED_{outcome}")
+
+    # 2. Update trades_log.csv
+    try:
+        journal.update_trade_outcome(
+            signal_id=signal_id,
+            exit_price=exit_price,
+            exit_time=now_eat_str,
+            pnl_usd=pnl_usd,
+            outcome=outcome,
+            notes=f"User reported {outcome} via Telegram button",
+        )
+    except Exception as exc:
+        print(f"  [listener] Warning: failed to update journal outcome: {exc}")
+
+    # 3. Update pattern_history.json
+    try:
+        pattern_stats.update_outcome(
+            signal_id=signal_id,
+            outcome=outcome,
+            pnl_usd=pnl_usd,
+        )
+    except Exception as exc:
+        print(f"  [listener] Warning: failed to update pattern_stats: {exc}")
+
+    # 4. Close trade in active_trades.json if present
+    try:
+        trades = post_mortem.load_active_trades()
+        if signal_id in trades:
+            trades[signal_id]["status"] = "CLOSED"
+            trades[signal_id]["exit_price"] = exit_price
+            trades[signal_id]["closed_eat"] = now_eat_str
+            trades[signal_id]["pnl_usd"] = pnl_usd
+            trades[signal_id]["outcome"] = outcome
+            post_mortem.save_active_trades(trades)
+    except Exception as exc:
+        print(f"  [listener] Warning: failed to close in active_trades: {exc}")
+
+    # 5. Trigger post-mortem analysis and send diagnostic card
+    try:
+        import data_fetcher
+        candles = None
+        if config.TWELVE_DATA_API_KEY:
+            try:
+                candles = data_fetcher.fetch_candles(pair, "15min", 20)
+            except Exception:
+                candles = None
+
+        fake_trade = {
+            "signal_id": signal_id,
+            "pair": pair,
+            "entry": entry,
+            "stop_loss": sl,
+            "take_profit": tp,
+            "direction": signal.get("direction", "ENTER_LONG"),
+        }
+        analysis = post_mortem.analyze_trade_with_ai(fake_trade, exit_price, outcome, candles)
+
+        pm_report = {
+            "signal_id": signal_id,
+            "pair": pair,
+            "outcome": outcome,
+            "entry": entry,
+            "exit_price": exit_price,
+            "pnl_usd": pnl_usd,
+            "duration": now_eat_str,
+            "root_cause": analysis["root_cause"],
+            "rule_followed": analysis["rule_followed"],
+            "actionable_lesson": analysis["actionable_lesson"],
+            "timestamp_eat": now_eat_str,
+        }
+        post_mortem.save_lesson({
+            "timestamp_eat": now_eat_str,
+            "pair": pair,
+            "outcome": outcome,
+            "actionable_lesson": analysis["actionable_lesson"],
+            "root_cause": analysis["root_cause"],
+        })
+        notifier.send_post_mortem(pm_report)
+    except Exception as exc:
+        print(f"  [listener] Error running post-mortem for {signal_id[:8]}…: {exc}")
+
+    # 6. Update the original Telegram card
+    outcome_note = (
+        f"{base_card}\n\n"
+        f"{emoji} ({pnl_sign}${pnl_usd:.2f})\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"💵 Exit Price : {exit_price}\n"
+        f"⏱  Closed EAT  : {now_eat_str}\n"
+        f"🧠 Diagnostic feedback delivered below."
+    )
+    _edit_message(chat_id, message_id, outcome_note, reply_markup={"inline_keyboard": []})
+    print(f"  [listener] Signal {signal_id[:8]}… outcome recorded as {outcome} ({pnl_sign}${pnl_usd:.2f}).")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -272,37 +569,63 @@ def _process_callback_query(cq: dict[str, Any]) -> None:
         print(f"  [listener] Signal {signal_id[:8]}… not found in pending_signals.json.")
         return
 
-    # Guard against double-tapping
     current_status = signal.get("status", "PENDING")
-    if current_status not in ("PENDING",):
-        _answer_callback(
-            callback_query_id,
-            text=f"Already {current_status}.",
-            alert=True,
-        )
-        print(
-            f"  [listener] Signal {signal_id[:8]}… already in state '{current_status}'. Skipped."
-        )
-        return
 
-    if action == "decline":
-        _handle_decline(signal_id, signal, chat_id, message_id, callback_query_id)
-        # Update outcome in journal as well
-        eat_tz  = pytz.timezone(config.TIMEZONE)
-        now_eat = datetime.now(tz=eat_tz).strftime("%Y-%m-%d %H:%M:%S")
-        try:
-            journal.update_trade_outcome(
-                signal_id=signal_id,
-                exit_price=0.0,
-                exit_time=now_eat,
-                pnl_usd=0.0,
-                outcome="DECLINED",
-                notes="Declined by user via Telegram",
+    # Route based on action
+    if action in ("accept", "decline"):
+        if current_status not in ("PENDING",):
+            _answer_callback(
+                callback_query_id,
+                text=f"Already {current_status}.",
+                alert=True,
             )
-        except Exception:
-            pass
-    elif action == "accept":
-        _handle_accept(signal_id, signal, chat_id, message_id, callback_query_id)
+            print(
+                f"  [listener] Signal {signal_id[:8]}… already in state '{current_status}'. Skipped."
+            )
+            return
+
+        if action == "decline":
+            _handle_decline(signal_id, signal, chat_id, message_id, callback_query_id, cq)
+            # Update outcome in journal as well
+            eat_tz  = pytz.timezone(config.TIMEZONE)
+            now_eat = datetime.now(tz=eat_tz).strftime("%Y-%m-%d %H:%M:%S")
+            try:
+                journal.update_trade_outcome(
+                    signal_id=signal_id,
+                    exit_price=0.0,
+                    exit_time=now_eat,
+                    pnl_usd=0.0,
+                    outcome="DECLINED",
+                    notes="Declined by user via Telegram",
+                )
+            except Exception:
+                pass
+        elif action == "accept":
+            _handle_accept(signal_id, signal, chat_id, message_id, callback_query_id, cq)
+
+    elif action in ("manual", "skip"):
+        if current_status not in ("PENDING", "WAITING_MANUAL"):
+            _answer_callback(
+                callback_query_id,
+                text=f"Already {current_status}.",
+                alert=True,
+            )
+            return
+        if action == "manual":
+            _handle_manual(signal_id, signal, chat_id, message_id, callback_query_id, cq)
+        elif action == "skip":
+            _handle_skip(signal_id, signal, chat_id, message_id, callback_query_id, cq)
+
+    elif action in ("win", "loss"):
+        if current_status in ("CLOSED_WIN", "CLOSED_LOSS"):
+            _answer_callback(
+                callback_query_id,
+                text=f"Outcome already recorded ({current_status}).",
+                alert=True,
+            )
+            return
+        _handle_report_outcome(action, signal_id, signal, chat_id, message_id, callback_query_id, cq)
+
     else:
         _answer_callback(callback_query_id, text="Unknown action.")
         print(f"  [listener] Unknown action: {action!r}")
