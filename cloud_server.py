@@ -223,26 +223,32 @@ def _execute_backup_task() -> None:
         print(f"  [cloud_server] ⚠️ github_sync.push_memory_files error: {exc}")
 
 
+_SCAN_LOCK = threading.Lock()
+
+
 def _execute_scan_task() -> None:
-    """Background worker running market scan and outcome tracking."""
-    print("\n  [cloud_server] 🚀 Triggering market scan cycle...")
-    try:
-        main.run_scan()
-    except Exception as exc:
-        print(f"  [cloud_server] ❌ Error in run_scan: {exc}")
+    """Background worker running market scan (which includes outcome tracking) and GitHub memory sync."""
+    if not _SCAN_LOCK.acquire(blocking=False):
+        print("  [cloud_server] ⏭️ Scan already in progress — skipping overlapping trigger.")
+        return
 
     try:
-        outcome_tracker.check_open_signal_outcomes()
-    except Exception as exc:
-        print(f"  [cloud_server] ❌ Error in outcome_tracker: {exc}")
+        print("\n  [cloud_server] 🚀 Triggering market scan cycle...")
+        try:
+            main.run_scan()
+        except Exception as exc:
+            print(f"  [cloud_server] ❌ Error in run_scan: {exc}")
+            _send_telegram_text(f"⚠️ Scheduled scan error: {exc}")
 
-    # Commit and push updated trades_log.csv and pattern_history.json to GitHub 'memory' branch
-    try:
-        github_sync.push_memory_files("Scan cycle completed & outcomes tracked")
-    except Exception as exc:
-        print(f"  [cloud_server] ⚠️ github_sync.push_memory_files error: {exc}")
+        # Commit and push updated memory state to GitHub 'memory' branch
+        try:
+            github_sync.push_memory_files("Scan cycle completed & outcomes tracked")
+        except Exception as exc:
+            print(f"  [cloud_server] ⚠️ github_sync.push_memory_files error: {exc}")
 
-    print("  [cloud_server] ✅ Market scan cycle completed.")
+        print("  [cloud_server] ✅ Market scan cycle completed.")
+    finally:
+        _SCAN_LOCK.release()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
