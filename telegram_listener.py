@@ -31,6 +31,7 @@ Usage
 """
 
 import argparse
+import html
 import sys
 import time
 from datetime import datetime
@@ -88,7 +89,10 @@ def _edit_message(
     if reply_markup is None:
         reply_markup = {"inline_keyboard": []}
 
-    text_to_send = new_text if ("<pre>" in new_text or "<b>" in new_text) else f"<pre>{new_text}</pre>"
+    inner = new_text
+    if inner.startswith("<pre>") and inner.endswith("</pre>"):
+        inner = inner[5:-6]
+    text_to_send = f"<pre>{html.escape(inner)}</pre>"
     try:
         _tg_post("editMessageText", {
             "chat_id":      chat_id,

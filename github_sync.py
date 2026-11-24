@@ -17,7 +17,9 @@ from typing import Any
 
 import requests
 
+import broker_executor
 import journal
+import notifier
 import pattern_stats
 import post_mortem
 
@@ -100,6 +102,8 @@ def _get_target_files() -> list[tuple[str, str]]:
         (journal.LOG_FILE, "trades_log.csv"),
         (pattern_stats.PATTERN_HISTORY_FILE, "pattern_history.json"),
         (post_mortem.LESSONS_FILE, "lessons_learned.json"),
+        (notifier.PENDING_SIGNALS_FILE, "pending_signals.json"),
+        (broker_executor.ACTIVE_TRADES_FILE, "active_trades.json"),
     ]
 
 

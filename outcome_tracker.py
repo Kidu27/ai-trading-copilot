@@ -142,8 +142,22 @@ def check_open_signal_outcomes(candles_by_pair: dict[str, pd.DataFrame] | None =
         hit_price = None
         hit_time_str = now_eat.strftime("%Y-%m-%d %H:%M:%S")
 
-        # Select candles after signal creation time
-        for _, candle in df_15m.iterrows():
+        # Select candles strictly after signal creation time (row_dt in Africa/Addis_Ababa)
+        for candle_ts, candle in df_15m.iterrows():
+            # Convert candle timestamp to EAT
+            try:
+                c_dt = pd.to_datetime(candle_ts)
+                if c_dt.tzinfo is None:
+                    c_dt_eat = pytz.utc.localize(c_dt).astimezone(eat_tz)
+                else:
+                    c_dt_eat = c_dt.astimezone(eat_tz)
+            except Exception:
+                continue
+
+            # Skip candles at or before the signal creation timestamp
+            if c_dt_eat <= row_dt:
+                continue
+
             c_high = float(candle.get("high", 0.0))
             c_low = float(candle.get("low", 0.0))
 
@@ -151,19 +165,23 @@ def check_open_signal_outcomes(candles_by_pair: dict[str, pd.DataFrame] | None =
                 if c_high >= tp:
                     hit_outcome = "WIN"
                     hit_price = tp
+                    hit_time_str = c_dt_eat.strftime("%Y-%m-%d %H:%M:%S")
                     break
                 elif c_low <= sl:
                     hit_outcome = "LOSS"
                     hit_price = sl
+                    hit_time_str = c_dt_eat.strftime("%Y-%m-%d %H:%M:%S")
                     break
             elif decision == "ENTER_SHORT":
                 if c_low <= tp:
                     hit_outcome = "WIN"
                     hit_price = tp
+                    hit_time_str = c_dt_eat.strftime("%Y-%m-%d %H:%M:%S")
                     break
                 elif c_high >= sl:
                     hit_outcome = "LOSS"
                     hit_price = sl
+                    hit_time_str = c_dt_eat.strftime("%Y-%m-%d %H:%M:%S")
                     break
 
         if not hit_outcome:

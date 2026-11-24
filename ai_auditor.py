@@ -165,7 +165,7 @@ Return ONLY valid JSON matching this exact schema:
   },
   "plain_english_summary": "<2–4 clear sentences a beginner can understand>"
 }
-""".strip()
+""".strip().replace("$500 account", f"${config.ACCOUNT_BALANCE:.0f} account")
 
 _SYSTEM_PROMPT = _BASE_SYSTEM_PROMPT
 
@@ -192,6 +192,9 @@ def _build_system_prompt() -> str:
     """
     min_score = getattr(config, "get_min_confluence_score", lambda: config.MIN_CONFLUENCE_SCORE)()
     prompt = _BASE_SYSTEM_PROMPT.replace(
+        "$500 account",
+        f"${config.ACCOUNT_BALANCE:.0f} account"
+    ).replace(
         "Any Confluence Score below 80 MUST produce `NO_TRADE`.",
         f"Any Confluence Score below {min_score} MUST produce `NO_TRADE`."
     ).replace(

@@ -71,7 +71,8 @@ TD_1H_CANDLES: int = 300            # 300 candles — enough history for EMA 200
 TD_15M_CANDLES: int = 50            # How many 15m candles to fetch
 
 # ── Signal Approval & Expiry ──────────────────────────────────────────────────
-SIGNAL_EXPIRY_MINUTES: int = 5      # Telegram approval buttons expire after N minutes
+SIGNAL_EXPIRY_MINUTES: int = 15     # Telegram approval buttons expire after N minutes
+NOTIFY_NO_TRADE: bool = True        # True = send NO_TRADE cards to Telegram; False = quiet mode (actionable only)
 
 # ── MetaTrader 5 macOS File-Bridge (optional) ──────────────────────────────────
 # Set to the absolute path of MetaTrader 5's MQL5/Files directory on macOS,

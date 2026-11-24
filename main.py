@@ -95,6 +95,7 @@ def run_scan() -> None:
         return
 
     # ── Scan each pair ────────────────────────────────────────────────────────
+    fetched_15m_by_pair: dict[str, Any] = {}
     for idx, symbol in enumerate(config.WATCHLIST):
         print(f"\n── Analysing {symbol} ─────────────────────────────────")
 
@@ -110,6 +111,7 @@ def run_scan() -> None:
         # GATE 1: Fetch data
         try:
             df_1h, df_15m = data_fetcher.fetch_pair_data(symbol)
+            fetched_15m_by_pair[symbol] = df_15m
         except RuntimeError as exc:
             print(f"  [Gate 1 FAILED] {exc}")
             continue
@@ -149,8 +151,9 @@ def run_scan() -> None:
         # GATE 4: Log + notify
         journal.log_setup(symbol, math_result, ai_result)
 
-        # Only send alert for actionable signals OR always for NO_TRADE (transparency)
-        notifier.send_alert(symbol, math_result, ai_result)
+        # Only send alert for actionable signals OR if NOTIFY_NO_TRADE is True
+        if decision in ("ENTER_LONG", "ENTER_SHORT") or getattr(config, "NOTIFY_NO_TRADE", True):
+            notifier.send_alert(symbol, math_result, ai_result)
 
         # Delay between pairs to respect API credit limits
         if idx < len(config.WATCHLIST) - 1 and getattr(config, "PAIR_REQUEST_DELAY_SECONDS", 0) > 0:
@@ -167,7 +170,7 @@ def run_scan() -> None:
     # ── Automatic Candle Outcome Tracker for Open & Missed Signals ───────────
     try:
         import outcome_tracker
-        outcome_tracker.check_open_signal_outcomes()
+        outcome_tracker.check_open_signal_outcomes(candles_by_pair=fetched_15m_by_pair)
     except Exception as exc:
         print(f"  [main] Outcome tracker error: {exc}")
 

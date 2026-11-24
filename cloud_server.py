@@ -12,6 +12,8 @@ Zero-Cost 24/5 Deployment Architecture:
        - Automatically registers setWebhook on Render startup via RENDER_EXTERNAL_URL
 """
 
+import html
+import json
 import os
 import threading
 from contextlib import asynccontextmanager
@@ -23,6 +25,7 @@ import requests
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 import uvicorn
 
+import broker_executor
 import config
 import github_sync
 import journal
@@ -144,7 +147,7 @@ def _send_telegram_text(text: str) -> bool:
     url = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": str(config.TELEGRAM_CHAT_ID),
-        "text": f"<pre>{text}</pre>",
+        "text": f"<pre>{html.escape(text)}</pre>",
         "parse_mode": "HTML",
     }
     try:
@@ -168,7 +171,7 @@ def _build_daily_report() -> str:
     try:
         readiness = pattern_stats.get_readiness_metrics()
         readiness_text = readiness.get("summary_text", "")
-        sample_size = readiness.get("sample_size", 0)
+        sample_size = readiness.get("total_trades", 0)
         win_rate = readiness.get("win_rate_pct", 0.0)
     except Exception:
         readiness_text = "Readiness: Gathering closed trade statistics."
@@ -207,6 +210,7 @@ def _execute_backup_task() -> None:
         (post_mortem.LESSONS_FILE, "🧠 Lessons Learned Memory (JSON)"),
         (pattern_stats.PATTERN_HISTORY_FILE, "🧬 Pattern History & Indicator Fingerprints (JSON)"),
         (notifier.PENDING_SIGNALS_FILE, "📋 Pending Signals Store (JSON)"),
+        (broker_executor.ACTIVE_TRADES_FILE, "💼 Active Trades Store (JSON)"),
     ]
     for fpath, caption in files_to_send:
         _send_telegram_document(fpath, caption=caption)
@@ -245,8 +249,8 @@ def _execute_scan_task() -> None:
 # Endpoints
 # ─────────────────────────────────────────────────────────────────────────────
 
-@app.get("/")
-@app.get("/health")
+@app.api_route("/", methods=["GET", "POST", "HEAD"])
+@app.api_route("/health", methods=["GET", "POST", "HEAD"])
 def health() -> dict[str, Any]:
     """
     Instant health check (<50ms).
@@ -260,8 +264,7 @@ def health() -> dict[str, Any]:
     }
 
 
-@app.get("/scan")
-@app.post("/scan")
+@app.api_route("/scan", methods=["GET", "POST", "HEAD"])
 def scan_endpoint(
     token: str | None = Query(None),
     authorization: str | None = Header(None, alias="Authorization"),
@@ -281,8 +284,7 @@ def scan_endpoint(
     }
 
 
-@app.get("/daily-backup")
-@app.post("/daily-backup")
+@app.api_route("/daily-backup", methods=["GET", "POST", "HEAD"])
 def daily_backup_endpoint(
     token: str | None = Query(None),
     authorization: str | None = Header(None, alias="Authorization"),
@@ -300,6 +302,86 @@ def daily_backup_endpoint(
         "status": "backup_started",
         "message": "End-of-session report and backup files are being dispatched to Telegram.",
     }
+
+
+def _send_open_trades_to_telegram() -> None:
+    """List all currently open/pending setups and send compact cards with WIN/LOSS buttons."""
+    open_trades: dict[str, dict[str, Any]] = {}
+
+    # 1. active_trades.json
+    try:
+        with open(broker_executor.ACTIVE_TRADES_FILE, "r", encoding="utf-8") as fh:
+            act = json.load(fh)
+            for sid, t in act.items():
+                if t.get("status") in ("OPEN", "WAITING_MANUAL", "MANUAL"):
+                    open_trades[sid] = t
+    except Exception:
+        pass
+
+    # 2. pending_signals.json
+    try:
+        with open(notifier.PENDING_SIGNALS_FILE, "r", encoding="utf-8") as fh:
+            pend = json.load(fh)
+            for sid, p in pend.items():
+                if p.get("status") in ("OPEN", "WAITING_MANUAL", "MANUAL"):
+                    if sid not in open_trades:
+                        open_trades[sid] = p
+    except Exception:
+        pass
+
+    if not open_trades:
+        _send_telegram_text("ℹ️ No active open or pending trades found.")
+        return
+
+    for sid, trade in open_trades.items():
+        pair = trade.get("pair", "UNKNOWN")
+        direction = trade.get("direction", "?")
+        entry = trade.get("entry") or trade.get("fill_price", "?")
+        sl = trade.get("stop_loss", "?")
+        tp = trade.get("take_profit", "?")
+        lots = trade.get("standard_lots", 0.01)
+        status = trade.get("status", "OPEN")
+        opened = trade.get("opened_eat") or trade.get("timestamp_eat", "?")
+
+        card_text = (
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📍 OPEN TRADE: {pair} ({direction})\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"💵 Entry Level : {entry}\n"
+            f"🛑 Stop Loss   : {sl}\n"
+            f"🎯 Take Profit : {tp}\n"
+            f"📦 Lots        : {lots}\n"
+            f"📊 Status      : {status}\n"
+            f"⏱ Opened EAT  : {opened}\n"
+            f"🔑 Signal ID   : {sid[:8]}…\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "Report outcome when trade closes:"
+        )
+
+        url = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/sendMessage"
+        payload = {
+            "chat_id": str(config.TELEGRAM_CHAT_ID),
+            "text": f"<pre>{html.escape(card_text)}</pre>",
+            "parse_mode": "HTML",
+            "reply_markup": {
+                "inline_keyboard": [
+                    [
+                        {"text": "🏆 Report WIN", "callback_data": f"win:{sid}"},
+                        {"text": "❌ Report LOSS", "callback_data": f"loss:{sid}"},
+                    ]
+                ]
+            },
+        }
+        try:
+            requests.post(url, json=payload, timeout=10)
+        except Exception as exc:
+            print(f"  [cloud_server] Error sending open trade card: {exc}")
+
+
+def _scan_and_notify() -> None:
+    _send_telegram_text("🚀 Scan cycle started via Telegram command...")
+    _execute_scan_task()
+    _send_telegram_text("✅ 7-pair scan and outcome tracking completed.")
 
 
 @app.post("/telegram-webhook")
@@ -330,20 +412,68 @@ async def telegram_webhook(request: Request) -> dict[str, str]:
         except Exception as exc:
             print(f"  [cloud_server] Error processing callback_query: {exc}")
 
-    # Optional handling of user text commands
+    # Handling of user slash commands
     elif "message" in update:
         msg = update["message"]
         text = msg.get("text", "").strip()
         chat_id = msg.get("chat", {}).get("id")
         if str(chat_id) == str(config.TELEGRAM_CHAT_ID):
-            if text in ("/status", "/health", "/ping"):
-                mode = "DEMO_DISCOVERY" if getattr(config, "DEMO_DISCOVERY_MODE", False) else "DEMO"
-                _send_telegram_text(f"🟢 Co-Pilot Cloud Server Active\nMode: {mode}\nHost: Render.com")
-            elif text in ("/backup", "/export"):
+            cmd = text.split()[0].split("@")[0].lower() if text else ""
+            if cmd in ("/status", "/health", "/ping"):
+                mode = "DEMO_DISCOVERY" if getattr(config, "DEMO_DISCOVERY_MODE", False) else ("DEMO" if config.DEMO_MODE else "LIVE")
+                notify_state = "VERBOSE — all scans" if getattr(config, "NOTIFY_NO_TRADE", True) else "QUIET — >=65 setups only"
+                watchlist_str = ", ".join(config.WATCHLIST)
+                status_msg = (
+                    "🟢 CO-PILOT SYSTEM STATUS\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"⚙️ Mode         : {mode}\n"
+                    f"🔔 Notification : {notify_state}\n"
+                    f"⏱ Expiry       : {config.SIGNAL_EXPIRY_MINUTES} min\n"
+                    f"📋 Watchlist    : {watchlist_str}\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    "Host: Render.com Cloud Runner"
+                )
+                _send_telegram_text(status_msg)
+            elif cmd in ("/scan", "/run"):
+                threading.Thread(target=_scan_and_notify, daemon=True).start()
+            elif cmd in ("/stats", "/metrics"):
+                readiness = pattern_stats.get_readiness_metrics()
+                summary_text = readiness.get("summary_text", "Readiness: Gathering closed trade statistics.")
+                win_dna = pattern_stats.get_win_signature_summary()
+                stats_msg = (
+                    "📊 WIN SIGNATURE & READINESS METRICS\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"{summary_text}\n\n"
+                    "── WINNING DNA SIGNATURE ────\n"
+                    f"{win_dna}"
+                )
+                _send_telegram_text(stats_msg)
+            elif cmd == "/open":
+                _send_open_trades_to_telegram()
+            elif cmd == "/quiet":
+                config.NOTIFY_NO_TRADE = False
+                _send_telegram_text("🤫 Quiet Mode Enabled: NO_TRADE cards silenced. Only actionable setups (confluence >= 65) will alert.")
+            elif cmd == "/verbose":
+                config.NOTIFY_NO_TRADE = True
+                _send_telegram_text("📢 Verbose Mode Enabled: All scan evaluations (including NO_TRADE cards) will be delivered.")
+            elif cmd in ("/backup", "/export"):
+                _send_telegram_text("📦 Dispatching end-of-session backup & memory sync to GitHub...")
                 threading.Thread(target=_execute_backup_task, daemon=True).start()
-            elif text in ("/scan", "/run"):
-                threading.Thread(target=_execute_scan_task, daemon=True).start()
-                _send_telegram_text("🚀 Scan triggered from Telegram command.")
+            elif cmd in ("/help", "/start"):
+                help_text = (
+                    "🤖 AI FOREX CO-PILOT COMMANDS\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    "/status  - Cloud mode, notify state & watchlist\n"
+                    "/scan    - Trigger immediate 7-pair market scan\n"
+                    "/open    - List open trades with WIN/LOSS buttons\n"
+                    "/stats   - Readiness metrics & winning DNA\n"
+                    "/quiet   - Silence NO_TRADE cards (actionable only)\n"
+                    "/verbose - Send all scan cards (including NO_TRADE)\n"
+                    "/backup  - Send daily report, files & sync GitHub\n"
+                    "/help    - Show this commands list\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                )
+                _send_telegram_text(help_text)
 
     return {"status": "ok"}
 

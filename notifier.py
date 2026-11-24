@@ -15,6 +15,7 @@ For NO_TRADE signals:
 If Telegram is not configured, falls back to console print.
 """
 
+import html
 import json
 import os
 import uuid
@@ -340,7 +341,7 @@ def _send_telegram_with_buttons(message: str, signal_id: str) -> None:
     url = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id":    config.TELEGRAM_CHAT_ID,
-        "text":       f"<pre>{message}</pre>",
+        "text":       f"<pre>{html.escape(message)}</pre>",
         "parse_mode": "HTML",
         "reply_markup": {
             "inline_keyboard": [[
@@ -370,7 +371,7 @@ def _send_telegram(message: str) -> None:
     url     = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id":    config.TELEGRAM_CHAT_ID,
-        "text":       f"<pre>{message}</pre>",
+        "text":       f"<pre>{html.escape(message)}</pre>",
         "parse_mode": "HTML",
     }
     try:

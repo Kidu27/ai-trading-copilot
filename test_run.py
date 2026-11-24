@@ -160,6 +160,7 @@ def run_mock_tests(
         import pattern_stats
         import news_fetcher
         import outcome_tracker
+        import github_sync
         _ok("All modules imported successfully.")
     except ImportError as exc:
         _fail("Import error", str(exc))
@@ -349,7 +350,7 @@ def run_mock_tests(
 
     # Verify dynamic prompt injection in ai_auditor
     dynamic_prompt = ai_auditor._build_system_prompt()
-    _check("RECENT POST-MORTEM LESSONS" in dynamic_prompt,
+    _check("PAST LOSS LESSONS TO AVOID" in dynamic_prompt,
            "ai_auditor dynamically injected recent lessons into system prompt")
 
     if simulate_close:
@@ -384,16 +385,21 @@ def run_mock_tests(
     dna_summary = pattern_stats.get_win_signature_summary()
     _check(isinstance(dna_summary, str), "get_win_signature_summary() returns str")
     readiness = pattern_stats.get_readiness_metrics()
-    _check("sample_size" in readiness, "get_readiness_metrics() contains sample_size")
+    _check("total_trades" in readiness, "get_readiness_metrics() contains total_trades")
     _check("win_rate_pct" in readiness, "get_readiness_metrics() contains win_rate_pct")
-    _ok("Pattern Stats", f"→ Sample size: {readiness['sample_size']}, Win rate: {readiness['win_rate_pct']}%")
+    _ok("Pattern Stats", f"→ Total trades: {readiness['total_trades']}, Win rate: {readiness['win_rate_pct']}%")
+
+    # Clean up pattern_history.json test entry
+    history = pattern_stats.load_pattern_history()
+    history.pop("mock_sig_123", None)
+    pattern_stats.save_pattern_history(history)
 
     # ── Test FXStreet News Bias Engine ─────────────────────────────────────────
     print("\n[10/10] Testing news_fetcher (FXStreet RSS & Sentiment) …")
     import news_fetcher
-    eur_news = news_fetcher.get_pair_news_bias("EUR/USD")
-    _check("bias" in eur_news, "get_pair_news_bias() returns bias", f"→ {eur_news['bias']}")
-    _check("headlines" in eur_news, "get_pair_news_bias() returns headlines list")
+    eur_news = news_fetcher.get_news_for_pair("EUR/USD")
+    _check("news_bias" in eur_news, "get_news_for_pair() returns news_bias", f"→ {eur_news['news_bias']}")
+    _check("headlines" in eur_news, "get_news_for_pair() returns headlines list")
 
     # ── Summary ───────────────────────────────────────────────────────────────
     _header("✅ ALL MOCK TESTS PASSED")

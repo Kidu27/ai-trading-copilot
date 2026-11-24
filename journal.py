@@ -98,40 +98,63 @@ def log_executed_trade(
     notes: str = "Order executed",
 ) -> None:
     """
-    Log an accepted/executed trade to trades_log.csv immediately.
+    Log or update an accepted/executed trade in trades_log.csv in-place.
 
-    Called by telegram_listener when user taps [✅ Accept & Enter].
-    Includes signal_id, pair, direction, entry, stop_loss, take_profit, and standard_lots.
+    Called by telegram_listener when user taps [✅ Accept & Enter] or [✅ Entered Manually].
+    Updates existing row matching signal_id (outcome="EXECUTED", entry_price=fill_price, notes)
+    to eliminate duplicate rows.
     """
     _ensure_headers()
 
-    eat_tz = pytz.timezone(config.TIMEZONE)
-    now_eat = datetime.now(tz=eat_tz).strftime("%Y-%m-%d %H:%M:%S")
+    target_id = signal.get("signal_id", "")
+    rows: list[dict[str, Any]] = []
+    updated = False
 
-    row = {
-        "timestamp_eat":   signal.get("timestamp_eat") or now_eat,
-        "signal_id":       signal.get("signal_id", ""),
-        "pair":            signal.get("pair", ""),
-        "decision":        signal.get("direction", "EXECUTED"),
-        "confluence_score": signal.get("confluence_score", 0),
-        "entry_price":     fill_price or signal.get("entry", ""),
-        "stop_loss":       signal.get("stop_loss", ""),
-        "take_profit":     signal.get("take_profit", ""),
-        "standard_lots":   signal.get("standard_lots", ""),
-        "risk_reward":     signal.get("risk_reward", ""),
-        "risk_usd":        signal.get("risk_usd", ""),
-        "outcome":         "EXECUTED",
-        "exit_price":      "",
-        "exit_time":       "",
-        "pnl_usd":         "",
-        "notes":           notes,
-    }
+    if os.path.exists(LOG_FILE):
+        with open(LOG_FILE, newline="", encoding="utf-8") as fh:
+            reader = csv.DictReader(fh)
+            for row in reader:
+                if target_id and row.get("signal_id") == target_id:
+                    row["outcome"] = "EXECUTED"
+                    if fill_price is not None:
+                        row["entry_price"] = str(fill_price)
+                    existing_notes = (row.get("notes") or "").strip()
+                    row["notes"] = f"{existing_notes} | {notes}" if existing_notes else notes
+                    updated = True
+                rows.append(row)
 
-    with open(LOG_FILE, "a", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=_CSV_HEADERS, extrasaction="ignore")
-        writer.writerow(row)
-
-    print(f"  [journal] Logged EXECUTED trade for {row['pair']} (ID: {row['signal_id'][:8]}…)")
+    if updated:
+        with open(LOG_FILE, "w", newline="", encoding="utf-8") as fh:
+            writer = csv.DictWriter(fh, fieldnames=_CSV_HEADERS, extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(rows)
+        print(f"  [journal] Updated in-place EXECUTED trade for {signal.get('pair', '')} (ID: {target_id[:8]}…)")
+    else:
+        # Fallback: append if signal_id row not previously logged
+        eat_tz = pytz.timezone(config.TIMEZONE)
+        now_eat = datetime.now(tz=eat_tz).strftime("%Y-%m-%d %H:%M:%S")
+        new_row = {
+            "timestamp_eat":   signal.get("timestamp_eat") or now_eat,
+            "signal_id":       target_id,
+            "pair":            signal.get("pair", ""),
+            "decision":        signal.get("direction", "EXECUTED"),
+            "confluence_score": signal.get("confluence_score", 0),
+            "entry_price":     fill_price or signal.get("entry", ""),
+            "stop_loss":       signal.get("stop_loss", ""),
+            "take_profit":     signal.get("take_profit", ""),
+            "standard_lots":   signal.get("standard_lots", ""),
+            "risk_reward":     signal.get("risk_reward", ""),
+            "risk_usd":        signal.get("risk_usd", ""),
+            "outcome":         "EXECUTED",
+            "exit_price":      "",
+            "exit_time":       "",
+            "pnl_usd":         "",
+            "notes":           notes,
+        }
+        with open(LOG_FILE, "a", newline="", encoding="utf-8") as fh:
+            writer = csv.DictWriter(fh, fieldnames=_CSV_HEADERS, extrasaction="ignore")
+            writer.writerow(new_row)
+        print(f"  [journal] Appended new EXECUTED trade for {new_row['pair']} (ID: {target_id[:8]}…)")
 
 
 def update_trade_outcome(

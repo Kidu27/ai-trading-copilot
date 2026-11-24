@@ -55,11 +55,12 @@ def analyse(
         result["fail_reasons"].append("1H trend is RANGING — no directional bias.")
 
     # ── 2. S/R Zone Clustering ────────────────────────────────────────────────
+    pip_size = 0.01 if "JPY" in symbol else 0.0001
     current_price = float(df_1h["close"].iloc[-1])
     result["current_price"] = round(current_price, 5)
 
     all_pivots = list(swing_highs) + list(swing_lows)
-    zones      = _cluster_zones(all_pivots, tolerance_pips=0.0010)
+    zones      = _cluster_zones(all_pivots, tolerance_pips=10 * pip_size)
     result["sr_zones"] = zones
 
     nearest_support    = _nearest_below(zones, current_price)
@@ -67,14 +68,13 @@ def analyse(
     result["nearest_support"]    = nearest_support
     result["nearest_resistance"] = nearest_resistance
 
-    near_zone = _is_near_zone(current_price, nearest_support, nearest_resistance)
+    near_zone = _is_near_zone(current_price, nearest_support, nearest_resistance, proximity_pips=30 * pip_size)
     result["price_near_key_zone"] = near_zone
     if not near_zone:
         result["passed_math_gate"] = False
         result["fail_reasons"].append("Price is not near a key S/R zone — no edge.")
 
     # ── 3. V2 Indicators (EMA, Fibonacci, ATR, RSI) ───────────────────────────
-    pip_size = 0.01 if "JPY" in symbol else 0.0001
 
     if config.USE_V2_INDICATORS:
         ema50  = _ema(df_1h["close"], 50)
