@@ -22,6 +22,7 @@ import sys
 import time
 import argparse
 from datetime import datetime
+from typing import Any
 
 import pytz
 

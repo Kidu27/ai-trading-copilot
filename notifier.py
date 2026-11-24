@@ -168,6 +168,8 @@ def _build_signal(
         "standard_lots":   standard_lots,
         "units":           units,
         "confluence_score": ai_result.get("confluence_score", 0),
+        "risk_reward":      trade_plan.get("risk_reward") or math_result.get("risk_reward_ratio", 2.0),
+        "risk_usd":         trade_plan.get("risk_usd") or math_result.get("max_risk_usd", 10.0),
         "status":          "PENDING",   # PENDING | ACCEPTED | DECLINED | EXPIRED | EXECUTED
     }
 
