@@ -1,7 +1,4 @@
 timestamp_eat,signal_id,pair,decision,confluence_score,entry_price,stop_loss,take_profit,standard_lots,risk_reward,risk_usd,outcome,exit_price,exit_time,pnl_usd,notes
-2026-11-23 21:21:49,dbce6cc1-5274-4c01-83c7-ad5737ed5d1a,,,0,,,,,,,LOSS,1.10764,2026-11-23 21:21:49,-2.0,"For EUR/USD (MOCK DEMO), require a confirmed 15m closed rejection candle before entering near S/R wh"
-2026-11-23 21:31:05,969f7e74-3e28-49fb-9ece-e0f49cb76b0a,EUR/USD,ENTER_LONG,0,1.085,1.083,1.0895,0.01,,,LOSS,1.083,2026-11-23 21:31:05,-2.0,"Mock setup for close simulation | For EUR/USD, require a confirmed 15m closed rejection candle before entering near S/R when market vo"
-2026-11-23 21:48:18,21cc4a8a-4e25-44bb-bc85-ca56381bf25a,EUR/USD,ENTER_LONG,0,1.085,1.083,1.0895,0.01,,,LOSS,1.083,2026-11-23 21:48:18,-2.0,Mock setup for close simulation | Always validate that entry and stop-loss parameters align directly with current live 15-minute marke
 2026-11-24 10:54:04,,EUR/USD,NO_TRADE,0,,,,0.01,,,OPEN,,,,
 2026-11-24 10:54:23,,GBP/USD,NO_TRADE,0,,,,0.01,,,OPEN,,,,
 2026-11-24 10:54:42,,USD/JPY,NO_TRADE,0,,,,0.03,,,OPEN,,,,
