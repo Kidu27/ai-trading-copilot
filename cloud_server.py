@@ -24,6 +24,7 @@ from fastapi import FastAPI, Header, HTTPException, Query, Request
 import uvicorn
 
 import config
+import github_sync
 import journal
 import main
 import notifier
@@ -34,12 +35,23 @@ import telegram_listener
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Lifespan: Automatic Telegram Webhook Registration
+# Lifespan: Automatic Telegram Webhook Registration & Memory Restoration
 # ─────────────────────────────────────────────────────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Register the Telegram webhook on Render startup if RENDER_EXTERNAL_URL is set."""
+    """
+    On Render startup:
+      1. Pull persistent memory state from GitHub 'memory' branch BEFORE any scans or webhooks.
+      2. Register the Telegram webhook if RENDER_EXTERNAL_URL is set.
+    """
+    # 1. Restore memory state from GitHub
+    try:
+        github_sync.pull_memory_files()
+    except Exception as exc:
+        print(f"  [cloud_server] ⚠️ Error pulling memory files from GitHub: {exc}")
+
+    # 2. Register Telegram webhook
     render_url = os.getenv("RENDER_EXTERNAL_URL", "").strip().rstrip("/")
     if render_url and config.TELEGRAM_BOT_TOKEN:
         webhook_url = f"{render_url}/telegram-webhook"
@@ -200,6 +212,12 @@ def _execute_backup_task() -> None:
         _send_telegram_document(fpath, caption=caption)
     print("  [cloud_server] ✅ End-of-session backup completed and sent to Telegram.")
 
+    # Commit and push state files to GitHub 'memory' branch
+    try:
+        github_sync.push_memory_files("Daily end-of-session backup")
+    except Exception as exc:
+        print(f"  [cloud_server] ⚠️ github_sync.push_memory_files error: {exc}")
+
 
 def _execute_scan_task() -> None:
     """Background worker running market scan and outcome tracking."""
@@ -213,6 +231,13 @@ def _execute_scan_task() -> None:
         outcome_tracker.check_open_signal_outcomes()
     except Exception as exc:
         print(f"  [cloud_server] ❌ Error in outcome_tracker: {exc}")
+
+    # Commit and push updated trades_log.csv and pattern_history.json to GitHub 'memory' branch
+    try:
+        github_sync.push_memory_files("Scan cycle completed & outcomes tracked")
+    except Exception as exc:
+        print(f"  [cloud_server] ⚠️ github_sync.push_memory_files error: {exc}")
+
     print("  [cloud_server] ✅ Market scan cycle completed.")
 
 
@@ -293,6 +318,15 @@ async def telegram_webhook(request: Request) -> dict[str, str]:
         cq = update["callback_query"]
         try:
             telegram_listener._process_callback_query(cq)
+
+            # Persist state to GitHub 'memory' branch after user button interaction
+            data_str = cq.get("data", "")
+            action = data_str.split(":", 1)[0] if ":" in data_str else "action"
+            threading.Thread(
+                target=github_sync.push_memory_files,
+                args=(f"User Telegram button: {action}",),
+                daemon=True,
+            ).start()
         except Exception as exc:
             print(f"  [cloud_server] Error processing callback_query: {exc}")
 
