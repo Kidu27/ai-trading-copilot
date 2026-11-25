@@ -16,5 +16,24 @@
     "session_tag": "LONDON_OPEN",
     "outcome": "SHADOW_LOSS",
     "pnl_usd": -10.0
+  },
+  "0d94fd55-a45d-44f8-bf56-9091cf9a999c": {
+    "signal_id": "0d94fd55-a45d-44f8-bf56-9091cf9a999c",
+    "timestamp_eat": "2026-11-25 16:46:00",
+    "pair": "GBP/USD",
+    "direction": "ENTER_LONG",
+    "rsi_14_15m": 47.4,
+    "ema_signal": "BEARISH",
+    "ema_gap_pips": 28.5,
+    "atr_15m": 0.00084,
+    "in_fib_golden_zone": true,
+    "candle_pattern": "NEUTRAL",
+    "body_pct": 0.698,
+    "news_bias": "NEUTRAL",
+    "confluence_score": 65,
+    "session_tag": "LONDON_NY_OVERLAP",
+    "outcome": "PENDING",
+    "pnl_usd": 0.0,
+    "is_shadow_candidate": false
   }
 }
