@@ -25,6 +25,7 @@ CURRENCY_KEYWORDS: dict[str, list[str]] = {
     "JPY": ["jpy", "yen", "boj", "ueda", "japan", "tokyo"],
     "CHF": ["chf", "franc", "snb", "jordan", "swiss", "switzerland"],
     "AUD": ["aud", "aussie", "rba", "bullock", "australia"],
+    "NZD": ["nzd", "kiwi", "rbnz", "orr", "new zealand"],
 }
 
 BULLISH_KEYWORDS = [

@@ -29,10 +29,10 @@ PAIRS: list[str] = [
     "EUR/USD",
     "GBP/USD",
     "USD/JPY",
-    "USD/CHF",
-    "AUD/USD",
     "EUR/JPY",
     "GBP/JPY",
+    "GBP/AUD",
+    "GBP/NZD",
 ]
 WATCHLIST: list[str] = PAIRS  # Alias for backward compatibility
 
