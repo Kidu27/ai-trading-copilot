@@ -5,15 +5,16 @@ ALL numbers are computed here with pure pandas/numpy.
 The LLM (Gate 3) only receives the final JSON dict from this module.
 
 Gate 2 logic:
-  1. 1H Market Structure  → trend classification
-  2. S/R Zone Clustering  → support, resistance, role-reversal zones
-  3. 15m Candle Story     → most recently CLOSED candle analysis
-  4. V2 Indicators        → EMA 50/200, Fibonacci Golden Zone, ATR(14)
-  5. Risk & Position Size → hard R:R gate, lot sizing
-
-If any hard rule fails, `passed_math_gate` is set to False.
+  1. Upfront OHLC Data Validation  → _validate_candles
+  2. Live FX Conversion Cache      → pair-aware pip values & risk capping
+  3. 1H/4H Market Structure & BOS  → swing detection & trend classification
+  4. Anchored S/R Zone Clustering  → non-chaining cluster anchors
+  5. Fibonacci Golden Zone & Area  → dynamic value area (S/R, Fib, EMA50)
+  6. 15m Directional Candle Story  → strict engulfing & trigger quality
+  7. Risk Sizing & Safety Gates    → hard rules + weighted score (0–100)
 """
 
+import math
 import numpy as np
 import pandas as pd
 from typing import Any
@@ -22,7 +23,142 @@ import config
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Public entry point
+# 1. Module-Level Live FX Conversion Cache (Zero Extra API Credits)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_LATEST_FX_RATES: dict[str, float] = {
+    "USD/JPY": 159.0,
+    "AUD/USD": 0.657,
+    "NZD/USD": 0.550,
+    "USD/CHF": 0.880,
+    "EUR/USD": 1.050,
+    "GBP/USD": 1.260,
+}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2. Upfront OHLC Data Validation
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _validate_candles(df_1h: pd.DataFrame, df_15m: pd.DataFrame) -> tuple[bool, str]:
+    """
+    Validate that OHLC DataFrames meet minimal row counts, required columns,
+    and valid price relationship constraints without NaNs.
+    """
+    if not isinstance(df_1h, pd.DataFrame) or len(df_1h) < 60:
+        count = len(df_1h) if isinstance(df_1h, pd.DataFrame) else 0
+        return False, f"df_1h has insufficient rows ({count} < 60)."
+    if not isinstance(df_15m, pd.DataFrame) or len(df_15m) < 25:
+        count = len(df_15m) if isinstance(df_15m, pd.DataFrame) else 0
+        return False, f"df_15m has insufficient rows ({count} < 25)."
+
+    req_cols = ["open", "high", "low", "close"]
+    for col in req_cols:
+        if col not in df_1h.columns:
+            return False, f"df_1h missing required column: {col}."
+        if col not in df_15m.columns:
+            return False, f"df_15m missing required column: {col}."
+
+    tail_1h = df_1h[req_cols].iloc[-20:]
+    if tail_1h.isna().any().any():
+        return False, "df_1h contains NaN values in the last 20 rows."
+    tail_15m = df_15m[req_cols].iloc[-20:]
+    if tail_15m.isna().any().any():
+        return False, "df_15m contains NaN values in the last 20 rows."
+
+    for label, tail in (("df_1h", tail_1h), ("df_15m", tail_15m)):
+        if not np.isfinite(tail.to_numpy(dtype=float)).all():
+            return False, f"{label} contains infinite values in the last 20 rows."
+        if (tail <= 0).any().any():
+            return False, f"{label} contains non-positive prices in the last 20 rows."
+        if not (tail["high"] >= tail["low"]).all():
+            return False, f"{label} has invalid OHLC: high < low in the last 20 rows."
+        if not ((tail["open"] <= tail["high"]) & (tail["open"] >= tail["low"]) &
+                (tail["close"] <= tail["high"]) & (tail["close"] >= tail["low"])).all():
+            return False, f"{label} has open/close outside [low, high] in the last 20 rows."
+
+    if not df_1h.index.is_monotonic_increasing or df_1h.index.has_duplicates:
+        return False, "df_1h timestamps are not strictly chronological and unique."
+    if not df_15m.index.is_monotonic_increasing or df_15m.index.has_duplicates:
+        return False, "df_15m timestamps are not strictly chronological and unique."
+
+    return True, ""
+
+
+def _build_empty_result(
+    symbol: str,
+    fail_reason: str,
+    current_price: float = 0.0,
+) -> dict[str, Any]:
+    """
+    Build a complete dict with safe default values for all 48 output keys
+    when data validation fails upfront.
+    """
+    min_math_score = 55 if (config.DEMO_MODE and getattr(config, "DEMO_DISCOVERY_MODE", False)) else 65
+    max_risk_usd = round(config.ACCOUNT_BALANCE * config.MAX_RISK_PERCENT, 2)
+    pip_val_usd = _get_pip_value_usd(symbol, current_price)
+
+    return {
+        "symbol":                       symbol,
+        "passed_math_gate":             False,
+        "fail_reasons":                 [fail_reason],
+        "trend_1h":                     "RANGING",
+        "swing_highs":                  [],
+        "swing_lows":                   [],
+        "current_price":                round(current_price, 5),
+        "sr_zones":                     [],
+        "nearest_support":              None,
+        "nearest_resistance":           None,
+        "price_near_key_zone":          False,
+        "ema50_1h":                     0.0,
+        "ema200_1h":                    0.0,
+        "ema_signal":                   "NEUTRAL",
+        "ema_gap_pips":                 0.0,
+        "fibonacci":                    {"available": False, "reason": fail_reason},
+        "in_fib_golden_zone":           False,
+        "atr_15m":                      0.0,
+        "atr_1h":                       0.0,
+        "rsi_14_15m":                   50.0,
+        "session_tag":                  _get_session_tag(),
+        "candle_story":                 {"available": False, "reason": fail_reason},
+        "last_10_candles_15m":          [],
+        "direction":                    "NONE",
+        "entry_price":                  None,
+        "stop_loss":                    None,
+        "take_profit":                  None,
+        "risk_pips":                    None,
+        "reward_pips":                  None,
+        "risk_reward_ratio":            0.0,
+        "position_size_lots":           None,
+        "position_size_micro_lots":     None,
+        "position_size_units":          None,
+        "account_balance":              config.ACCOUNT_BALANCE,
+        "max_risk_usd":                 max_risk_usd,
+        "atr_buffer":                   0.0,
+        "value_area_type":              "NONE",
+        "directional_candle_confirmed": False,
+        "candle_quality":               "NONE",
+        "pip_value_usd":                round(pip_val_usd, 4),
+        "actual_risk_usd":              0.0,
+        "risk_cap_exceeded":            False,
+        "tp_source":                    "NONE",
+        "math_setup_score":             0,
+        "score_breakdown": {
+            "structure":    0,
+            "value_area":   0,
+            "price_action": 0,
+            "ema_momentum": 0,
+            "fibonacci":    0,
+            "risk_reward":  0,
+        },
+        "trend_4h":                     "UNKNOWN",
+        "structure_event":              "NONE",
+        "min_math_score":               min_math_score,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 3. Public Entry Point
 # ─────────────────────────────────────────────────────────────────────────────
 
 def analyse(
@@ -31,65 +167,100 @@ def analyse(
     df_15m: pd.DataFrame,
 ) -> dict[str, Any]:
     """
-    Run all Gate 2 deterministic checks.
+    Run all Gate 2 deterministic technical and risk checks.
 
     Args:
-        symbol: e.g. "EUR/USD"
-        df_1h:  300-candle 1H DataFrame (oldest → newest); 300 candles ensures EMA 200 is accurate.
-        df_15m: 50-candle 15m DataFrame (oldest → newest)
+        symbol: e.g. "EUR/USD" or "EUR/USD (MOCK)"
+        df_1h:  1H DataFrame (oldest → newest; >= 60 rows)
+        df_15m: 15m DataFrame (oldest → newest; >= 25 rows)
 
     Returns:
-        JSON-serialisable dict with all metrics + `passed_math_gate` bool.
+        JSON-serialisable dict with all 48 metrics + `passed_math_gate` bool.
     """
-    result: dict[str, Any] = {"symbol": symbol, "passed_math_gate": True, "fail_reasons": []}
+    # ── 1. Upfront OHLC Validation ───────────────────────────────────────────
+    valid, err_msg = _validate_candles(df_1h, df_15m)
+    if not valid:
+        curr_p = (
+            float(df_1h["close"].iloc[-1])
+            if (isinstance(df_1h, pd.DataFrame) and len(df_1h) > 0 and "close" in df_1h.columns)
+            else 0.0
+        )
+        return _build_empty_result(symbol, err_msg, curr_p)
 
-    # ── 1. 1H Market Structure ────────────────────────────────────────────────
-    swing_highs, swing_lows = _find_swings(df_1h)
-    trend      = _classify_trend(swing_highs, swing_lows)
-    result["trend_1h"]    = trend
-    result["swing_highs"] = [round(p, 5) for p in swing_highs[-6:]]
-    result["swing_lows"]  = [round(p, 5) for p in swing_lows[-6:]]
-
-    if trend == "RANGING":
-        result["passed_math_gate"] = False
-        result["fail_reasons"].append("1H trend is RANGING — no directional bias.")
-
-    # ── 2. S/R Zone Clustering ────────────────────────────────────────────────
-    pip_size = 0.01 if "JPY" in symbol else 0.0001
     current_price = float(df_1h["close"].iloc[-1])
-    result["current_price"] = round(current_price, 5)
+    clean_sym = symbol.split(" ")[0].upper()
+    _LATEST_FX_RATES[clean_sym] = current_price
 
-    atr_1h = float(_atr(df_1h, period=14).iloc[-1])
+    pip_size = 0.01 if "JPY" in symbol else 0.0001
+    result: dict[str, Any] = {
+        "symbol": symbol,
+        "current_price": round(current_price, 5),
+        "passed_math_gate": True,
+        "fail_reasons": [],
+    }
+
+    # ── 2. Indicators & Swings Computed Strictly on Closed Candles ───────────
+    df_1h_closed = df_1h.iloc[:-1]
+    df_15m_closed = df_15m.iloc[:-1]
+
+    ema50_series = _ema(df_1h_closed["close"], 50)
+    ema200_series = _ema(df_1h_closed["close"], 200)
+    atr_1h_series = _atr(df_1h_closed, period=14)
+    atr_1h = float(atr_1h_series.iloc[-1])
     result["atr_1h"] = round(atr_1h, 5)
 
-    all_pivots = list(swing_highs) + list(swing_lows)
-    zone_tolerance = max(0.6 * atr_1h, 8 * pip_size)
-    zones      = _cluster_zones(all_pivots, tolerance_pips=zone_tolerance)
+    atr_15m_series = _atr(df_15m_closed, period=14)
+    atr_15m = float(atr_15m_series.iloc[-1])
+    result["atr_15m"] = round(atr_15m, 5)
+
+    rsi_series = _rsi(df_15m_closed["close"], period=14)
+    result["rsi_14_15m"] = round(float(rsi_series.iloc[-1] if len(rsi_series) >= 1 else 50.0), 1)
+
+    # ── 3. Market Structure & 4H Trend Context ────────────────────────────────
+    swing_highs, swing_lows = _find_swings(df_1h_closed, left=3, right=3)
+    result["swing_highs"] = [round(p, 5) for _, p in swing_highs[-6:]]
+    result["swing_lows"]  = [round(p, 5) for _, p in swing_lows[-6:]]
+
+    closed_1h_close = float(df_1h_closed["close"].iloc[-1])
+    trend, structure_event = _classify_trend(
+        swing_highs=swing_highs,
+        swing_lows=swing_lows,
+        current_price=closed_1h_close,
+        ema50_series=ema50_series,
+        ema200_series=ema200_series,
+        atr_1h=atr_1h,
+    )
+    result["trend_1h"] = trend
+    result["structure_event"] = structure_event
+
+    trend_4h = _compute_trend_4h(df_1h)
+    result["trend_4h"] = trend_4h
+
+    # ── 4. S/R Zone Clustering & Dynamic Tolerance ───────────────────────────
+    all_pivots = [p for _, p in swing_highs] + [p for _, p in swing_lows]
+    zone_tolerance = max(0.5 * atr_1h, 8 * pip_size)
+    zones = _cluster_zones(all_pivots, tolerance_pips=zone_tolerance)
     result["sr_zones"] = zones
 
-    nearest_support    = _nearest_below(zones, current_price)
+    nearest_support = _nearest_below(zones, current_price)
     nearest_resistance = _nearest_above(zones, current_price)
-    result["nearest_support"]    = nearest_support
+    result["nearest_support"] = nearest_support
     result["nearest_resistance"] = nearest_resistance
 
     zone_proximity = max(1.5 * atr_1h, 20 * pip_size)
-    near_zone = _is_near_zone(current_price, nearest_support, nearest_resistance, proximity_pips=zone_proximity, trend=trend)
-    result["price_near_key_zone"] = near_zone
-    if not near_zone:
-        result["passed_math_gate"] = False
-        result["fail_reasons"].append("Price is not near a key S/R zone — no edge.")
+    near_static_zone = _is_near_zone(
+        current_price, nearest_support, nearest_resistance,
+        proximity_pips=zone_proximity, trend=trend,
+    )
 
-    # ── 3. V2 Indicators (EMA, Fibonacci, ATR, RSI) ───────────────────────────
-
+    # ── 5. V2 Indicators & Dynamic Value Area ─────────────────────────────────
     if config.USE_V2_INDICATORS:
-        ema50  = _ema(df_1h["close"], 50)
-        ema200 = _ema(df_1h["close"], 200)
-        result["ema50_1h"]  = round(float(ema50.iloc[-1]),  5)
-        result["ema200_1h"] = round(float(ema200.iloc[-1]), 5)
-        result["ema_signal"] = (
-            "BULLISH" if ema50.iloc[-1] > ema200.iloc[-1] else "BEARISH"
-        )
-        result["ema_gap_pips"] = round(abs(float(ema50.iloc[-1]) - float(ema200.iloc[-1])) / pip_size, 1)
+        ema50_val = float(ema50_series.iloc[-1])
+        ema200_val = float(ema200_series.iloc[-1])
+        result["ema50_1h"] = round(ema50_val, 5)
+        result["ema200_1h"] = round(ema200_val, 5)
+        result["ema_signal"] = "BULLISH" if ema50_val > ema200_val else "BEARISH"
+        result["ema_gap_pips"] = round(abs(ema50_val - ema200_val) / pip_size, 1)
 
         fib = _fibonacci_zones(swing_highs, swing_lows, trend)
         result["fibonacci"] = fib
@@ -99,132 +270,298 @@ def analyse(
             result["in_fib_golden_zone"] = bool(gz_min <= current_price <= gz_max)
         else:
             result["in_fib_golden_zone"] = False
-
-        atr_15m = _atr(df_15m, period=14)
-        result["atr_15m"] = round(float(atr_15m.iloc[-1]), 5)
     else:
+        result["ema50_1h"] = 0.0
+        result["ema200_1h"] = 0.0
+        result["ema_signal"] = "NEUTRAL"
         result["ema_gap_pips"] = 0.0
+        result["fibonacci"] = {"available": False, "reason": "V2 indicators disabled."}
         result["in_fib_golden_zone"] = False
-        result["atr_15m"] = round(float(_atr(df_15m, period=14).iloc[-1]), 5)
 
-    # 15m RSI(14)
-    rsi_series = _rsi(df_15m["close"], period=14)
-    result["rsi_14_15m"] = round(float(rsi_series.iloc[-2] if len(rsi_series) >= 2 else 50.0), 1)
+    ema50_last = float(ema50_series.iloc[-1])
+    near_dynamic_ema50 = (trend != "RANGING") and (abs(current_price - ema50_last) <= 1.0 * atr_1h)
+    in_value_area = near_static_zone or near_dynamic_ema50 or bool(result.get("in_fib_golden_zone", False))
+    result["price_near_key_zone"] = in_value_area
 
-    # Session Tag (EAT trading windows)
+    if near_static_zone:
+        result["value_area_type"] = "SR_ZONE"
+    elif result.get("in_fib_golden_zone", False):
+        result["value_area_type"] = "FIB_GOLDEN_ZONE"
+    elif near_dynamic_ema50:
+        result["value_area_type"] = "DYNAMIC_EMA50"
+    else:
+        result["value_area_type"] = "NONE"
+
+    # ── 6. 15m Directional Candle Story & Sessions ───────────────────────────
     result["session_tag"] = _get_session_tag()
 
-    # ── 4. 15m Candle Story ───────────────────────────────────────────────────
-    # Always drop the live forming candle (df.iloc[-1]).
-    # Evaluate df.iloc[-2] — the most recently CLOSED, confirmed candle.
-    df_15m_closed = df_15m.iloc[:-1]   # strip the live/forming candle entirely
-    candle_story = _analyse_candle(df_15m_closed, candle_index=-1)  # -1 of closed slice = -2 of original
+    # Always evaluate the most recently CLOSED candle (df_15m.iloc[:-1] index -1)
+    df_15m_closed = df_15m.iloc[:-1]
+    candle_story = _analyse_candle(df_15m_closed, candle_index=-1)
     result["candle_story"] = candle_story
+    result["last_10_candles_15m"] = _last_n_candles(df_15m, n=10)
 
-    last_10_candles = _last_n_candles(df_15m, n=10)
-    result["last_10_candles_15m"] = last_10_candles
+    candle_quality = _evaluate_candle_quality(candle_story, trend)
+    result["candle_quality"] = candle_quality
+    result["directional_candle_confirmed"] = (candle_quality == "STRONG")
 
-    # Gate 2 Quality Checks (only when trend != RANGING and near_zone is True)
-    if trend != "RANGING" and near_zone:
-        # Structural Alignment
-        structural_aligned = (
-            (trend == "UPTREND" and result.get("ema_signal") == "BULLISH")
-            or (trend == "DOWNTREND" and result.get("ema_signal") == "BEARISH")
-            or bool(result.get("in_fib_golden_zone", False))
-        )
-        if not structural_aligned:
-            result["passed_math_gate"] = False
-            result["fail_reasons"].append("Neither 1H EMA 50/200 nor Fibonacci Golden Zone aligns with trend.")
-
-        # 15m Closed Candle Confirmation
-        candle_confirmed = (
-            candle_story.get("body_pct", 0) >= 0.40
-            or candle_story.get("upper_wick_pct", 0) >= 0.50
-            or candle_story.get("lower_wick_pct", 0) >= 0.50
-            or candle_story.get("engulfing", "NONE") != "NONE"
-        )
-        if not candle_confirmed:
-            result["passed_math_gate"] = False
-            result["fail_reasons"].append("15m closed candle lacks directional body or rejection wick.")
-
-    # ── 5. Risk & Position Sizing (Hard Gate) ────────────────────────────────
+    # ── 7. Risk Sizing & Hard Cap ─────────────────────────────────────────────
     risk_metrics = _calculate_risk(
         symbol=symbol,
         trend=trend,
         current_price=current_price,
         nearest_support=nearest_support,
         nearest_resistance=nearest_resistance,
-        atr=result["atr_15m"],
+        near_static_zone=near_static_zone,
+        in_value_area=in_value_area,
+        atr_15m=atr_15m,
+        atr_1h=atr_1h,
+        ema50_last=ema50_last,
+        df_15m=df_15m,
     )
     result.update(risk_metrics)
 
+    # ── 8. Gate 2 Setup Score (0–100) & Safety Rules ──────────────────────────
+    score_structure = 0
+    if structure_event in ("HH_HL", "LH_LL", "BOS_BULLISH", "BOS_BEARISH"):
+        score_structure = 20
+    elif structure_event == "EMA_TREND":
+        score_structure = 15
+
+    if (trend == "UPTREND" and trend_4h == "BULLISH") or (trend == "DOWNTREND" and trend_4h == "BEARISH"):
+        score_structure += 5
+    score_structure = min(score_structure, 25)
+
+    score_value_area = 0
+    if near_static_zone:
+        score_value_area = 20
+        aligned_zone = nearest_support if trend == "UPTREND" else nearest_resistance
+        if aligned_zone and aligned_zone.get("touch_count", 0) >= 3:
+            score_value_area += 5
+    elif near_dynamic_ema50 or result.get("in_fib_golden_zone", False):
+        score_value_area = 15
+    score_value_area = min(score_value_area, 25)
+
+    score_price_action = 0
+    if candle_quality == "STRONG":
+        score_price_action = 20
+    elif candle_quality == "MODERATE":
+        score_price_action = 10
+
+    score_ema_momentum = 0
+    if (trend == "UPTREND" and result["ema_signal"] == "BULLISH") or (trend == "DOWNTREND" and result["ema_signal"] == "BEARISH"):
+        score_ema_momentum += 10
+    rsi_val = result["rsi_14_15m"]
+    if trend == "UPTREND" and (35.0 <= rsi_val <= 68.0):
+        score_ema_momentum += 5
+    elif trend == "DOWNTREND" and (32.0 <= rsi_val <= 65.0):
+        score_ema_momentum += 5
+    score_ema_momentum = min(score_ema_momentum, 15)
+
+    score_fib = 10 if result.get("in_fib_golden_zone", False) else 0
+
+    rr = risk_metrics.get("risk_reward_ratio", 0.0)
     min_rr = getattr(config, "get_min_risk_reward", lambda: config.MIN_RISK_REWARD)()
-    if risk_metrics.get("risk_reward_ratio", 0) < min_rr:
-        result["passed_math_gate"] = False
+    if rr >= 2.0:
+        score_rr = 5
+    elif rr >= min_rr:
+        score_rr = 3
+    else:
+        score_rr = 0
+
+    score_breakdown = {
+        "structure":    score_structure,
+        "value_area":   score_value_area,
+        "price_action": score_price_action,
+        "ema_momentum": score_ema_momentum,
+        "fibonacci":    score_fib,
+        "risk_reward":  score_rr,
+    }
+    math_setup_score = min(sum(score_breakdown.values()), 100)
+    result["math_setup_score"] = math_setup_score
+    result["score_breakdown"] = score_breakdown
+
+    min_math_score = 55 if (config.DEMO_MODE and getattr(config, "DEMO_DISCOVERY_MODE", False)) else 65
+    result["min_math_score"] = min_math_score
+
+    # Hard Safety Rules (all must pass)
+    all_hard_rules_pass = True
+    if trend == "RANGING":
+        all_hard_rules_pass = False
+        result["fail_reasons"].append("1H trend is RANGING — no directional bias.")
+
+    if not in_value_area:
+        all_hard_rules_pass = False
+        result["fail_reasons"].append("Price is not in a value area (S/R zone, Fib golden zone, or dynamic EMA50) — no edge.")
+
+    if rr < min_rr:
+        all_hard_rules_pass = False
+        result["fail_reasons"].append(f"R:R ratio {rr:.2f} < minimum {min_rr}.")
+
+    if risk_metrics.get("risk_cap_exceeded", False):
+        all_hard_rules_pass = False
+        actual_risk_val = risk_metrics.get("actual_risk_usd", 0.0)
+        max_risk_val = risk_metrics.get("max_risk_usd", 0.0)
         result["fail_reasons"].append(
-            f"R:R ratio {risk_metrics.get('risk_reward_ratio', 0):.2f} < "
-            f"minimum {min_rr}."
+            f"Position risk cap exceeded: minimum 0.01 lot risk ${actual_risk_val:.2f} > max risk (${max_risk_val:.2f})."
         )
+
+    if math_setup_score < min_math_score:
+        result["fail_reasons"].append(f"Gate 2 setup score {math_setup_score}/100 < minimum {min_math_score}.")
+
+    passed_math_gate = all_hard_rules_pass and (math_setup_score >= min_math_score)
+    result["passed_math_gate"] = passed_math_gate
+
+    actual_risk_usd = risk_metrics.get("actual_risk_usd", 0.0)
+    print(
+        f"  [market_math] {symbol} | Struct: {structure_event} | 4H: {trend_4h} | "
+        f"Area: {result['value_area_type']} | Candle: {candle_quality} | "
+        f"Score: {math_setup_score}/100 | Risk: ${actual_risk_usd}"
+    )
 
     return result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 1. Market Structure
+# 4. Market Structure & 4H Trend Helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _find_swings(df: pd.DataFrame, left: int = 5, right: int = 5) -> tuple[np.ndarray, np.ndarray]:
+def _find_swings(
+    df: pd.DataFrame,
+    left: int = 3,
+    right: int = 3,
+) -> tuple[list[tuple[int, float]], list[tuple[int, float]]]:
     """
     Detect swing highs and swing lows using a local pivot algorithm.
 
-    A swing high at index i: df['high'][i] is the max over [i-left .. i+right].
-    A swing low  at index i: df['low'][i]  is the min over [i-left .. i+right].
+    Returns:
+        (swing_highs, swing_lows) as lists of (int_idx, float_price) tuples
+        preserving chronological order.
     """
-    highs  = df["high"].values
-    lows   = df["low"].values
-    n      = len(df)
+    highs = df["high"].values
+    lows  = df["low"].values
+    n     = len(df)
 
-    swing_high_prices: list[float] = []
-    swing_low_prices:  list[float] = []
+    swing_highs: list[tuple[int, float]] = []
+    swing_lows:  list[tuple[int, float]] = []
 
     for i in range(left, n - right):
         window_h = highs[i - left : i + right + 1]
         window_l = lows[i  - left : i + right + 1]
 
         if highs[i] == window_h.max():
-            swing_high_prices.append(highs[i])
+            swing_highs.append((i, float(highs[i])))
         if lows[i] == window_l.min():
-            swing_low_prices.append(lows[i])
+            swing_lows.append((i, float(lows[i])))
 
-    return np.array(swing_high_prices), np.array(swing_low_prices)
+    return swing_highs, swing_lows
 
 
-def _classify_trend(swing_highs: np.ndarray, swing_lows: np.ndarray) -> str:
+def _classify_trend(
+    swing_highs: list[tuple[int, float]],
+    swing_lows: list[tuple[int, float]],
+    current_price: float,
+    ema50_series: pd.Series,
+    ema200_series: pd.Series,
+    atr_1h: float,
+) -> tuple[str, str]:
     """
-    Classify trend using Higher Highs / Higher Lows (HH/HL) or LH/LL logic.
-
-    Rules:
-      UPTREND   — last 2 swing highs are rising AND last 2 swing lows are rising.
-      DOWNTREND — last 2 swing highs are falling AND last 2 swing lows are falling.
-      RANGING   — anything else.
+    Classify trend and market structure event using:
+      1. Clean Structure (HH_HL / LH_LL)
+      2. Break of Structure (BOS_BULLISH / BOS_BEARISH)
+      3. Strong EMA Trend Fallback (EMA_TREND)
+      4. Fallback: RANGING / NONE
     """
-    if len(swing_highs) < 2 or len(swing_lows) < 2:
-        return "RANGING"
+    ema50_last = float(ema50_series.iloc[-1])
+    ema200_last = float(ema200_series.iloc[-1])
+    ema50_prev10 = float(ema50_series.iloc[-11]) if len(ema50_series) >= 11 else float(ema50_series.iloc[0])
 
-    hh = swing_highs[-1] > swing_highs[-2]   # Higher High
-    hl = swing_lows[-1]  > swing_lows[-2]    # Higher Low
-    lh = swing_highs[-1] < swing_highs[-2]   # Lower High
-    ll = swing_lows[-1]  < swing_lows[-2]    # Lower Low
+    # 1. Clean Structure
+    if len(swing_highs) >= 2 and len(swing_lows) >= 2:
+        hh = swing_highs[-1][1] > swing_highs[-2][1]
+        hl = swing_lows[-1][1] > swing_lows[-2][1]
+        lh = swing_highs[-1][1] < swing_highs[-2][1]
+        ll = swing_lows[-1][1] < swing_lows[-2][1]
+        if hh and hl:
+            return "UPTREND", "HH_HL"
+        if lh and ll:
+            return "DOWNTREND", "LH_LL"
 
-    if hh and hl:
-        return "UPTREND"
-    if lh and ll:
-        return "DOWNTREND"
-    return "RANGING"
+    # 2. Break of Structure (BOS) — closed 1H break past last 2 swings + directional EMA separation
+    if len(swing_highs) >= 2:
+        prev_high_cap = max(swing_highs[-1][1], swing_highs[-2][1])
+        if (
+            current_price > prev_high_cap + (0.25 * atr_1h)
+            and current_price > ema50_last
+            and ema50_last > ema200_last
+            and (ema50_last - ema200_last) >= 0.35 * atr_1h
+        ):
+            return "UPTREND", "BOS_BULLISH"
+    if len(swing_lows) >= 2:
+        prev_low_floor = min(swing_lows[-1][1], swing_lows[-2][1])
+        if (
+            current_price < prev_low_floor - (0.25 * atr_1h)
+            and current_price < ema50_last
+            and ema50_last < ema200_last
+            and (ema200_last - ema50_last) >= 0.35 * atr_1h
+        ):
+            return "DOWNTREND", "BOS_BEARISH"
+
+    # 3. Strong EMA Trend Fallback
+    if (
+        ema50_last > ema200_last
+        and (ema50_last - ema200_last) >= 0.5 * atr_1h
+        and current_price >= (ema50_last - 0.5 * atr_1h)
+        and ema50_last > ema50_prev10
+    ):
+        return "UPTREND", "EMA_TREND"
+
+    if (
+        ema50_last < ema200_last
+        and (ema200_last - ema50_last) >= 0.5 * atr_1h
+        and current_price <= (ema50_last + 0.5 * atr_1h)
+        and ema50_last < ema50_prev10
+    ):
+        return "DOWNTREND", "EMA_TREND"
+
+    return "RANGING", "NONE"
+
+
+def _compute_trend_4h(df_1h: pd.DataFrame) -> str:
+    """
+    Resample 1H candles to 4H bars and check EMA 20 position.
+    Returns: 'BULLISH', 'BEARISH', or 'UNKNOWN'.
+    """
+    try:
+        df_copy = df_1h.copy()
+        if not isinstance(df_copy.index, pd.DatetimeIndex):
+            df_copy.index = pd.to_datetime(df_copy.index)
+        df_4h = df_copy.resample("4h").agg({
+            "open":  "first",
+            "high":  "max",
+            "low":   "min",
+            "close": "last",
+        }).dropna()
+
+        df_4h_closed = df_4h.iloc[:-1]
+        if len(df_4h_closed) < 20:
+            return "UNKNOWN"
+
+        ema20_4h = _ema(df_4h_closed["close"], 20)
+        c_last = float(df_4h_closed["close"].iloc[-1])
+        e_last = float(ema20_4h.iloc[-1])
+
+        if c_last > e_last:
+            return "BULLISH"
+        elif c_last < e_last:
+            return "BEARISH"
+        return "UNKNOWN"
+    except Exception:
+        return "UNKNOWN"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 2. S/R Zone Clustering
+# 5. S/R Zone Clustering & Fibonacci Helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _cluster_zones(
@@ -232,8 +569,8 @@ def _cluster_zones(
     tolerance_pips: float = 0.0010,
 ) -> list[dict[str, Any]]:
     """
-    Group pivot prices that are within `tolerance_pips` of each other
-    into zones. Returns zones with >= 2 touches (meaningful S/R).
+    Group pivot prices into zones anchored at the cluster start (current[0])
+    so zones never chain into oversized bands. Returns zones with >= 2 touches.
     """
     if not pivots:
         return []
@@ -243,7 +580,7 @@ def _cluster_zones(
     current: list[float] = [sorted_pivots[0]]
 
     for price in sorted_pivots[1:]:
-        if price - current[-1] <= tolerance_pips:
+        if price - current[0] <= tolerance_pips:
             current.append(price)
         else:
             clusters.append(current)
@@ -300,8 +637,68 @@ def _is_near_zone(
     return False
 
 
+def _fibonacci_zones(
+    swing_highs: list[tuple[int, float]],
+    swing_lows: list[tuple[int, float]],
+    trend: str,
+) -> dict[str, Any]:
+    """
+    Calculate Fibonacci retracement levels from the most recent chronological impulse leg.
+
+    For UPTREND  : low_idx < high_idx
+    For DOWNTREND: high_idx < low_idx
+    Golden Zone is always strictly ordered: golden_zone_low < golden_zone_high.
+    """
+    if not swing_highs or not swing_lows:
+        return {"available": False, "reason": "Insufficient swing data."}
+
+    swing_start: float | None = None
+    swing_end: float | None = None
+
+    if trend == "UPTREND":
+        for h_idx, h_p in reversed(swing_highs):
+            valid_lows = [(l_idx, l_p) for l_idx, l_p in swing_lows if l_idx < h_idx]
+            if valid_lows:
+                swing_start = valid_lows[-1][1]
+                swing_end = h_p
+                break
+    elif trend == "DOWNTREND":
+        for l_idx, l_p in reversed(swing_lows):
+            valid_highs = [(h_idx, h_p) for h_idx, h_p in swing_highs if h_idx < l_idx]
+            if valid_highs:
+                swing_start = valid_highs[-1][1]
+                swing_end = l_p
+                break
+    else:
+        return {"available": False, "reason": "RANGING — Fibonacci not applicable."}
+
+    if swing_start is None or swing_end is None or swing_start == swing_end:
+        return {"available": False, "reason": "No valid chronological impulse leg."}
+
+    leg = swing_end - swing_start
+    fib_38_2 = round(swing_end - 0.382 * leg, 5)
+    fib_50_0 = round(swing_end - 0.500 * leg, 5)
+    fib_61_8 = round(swing_end - 0.618 * leg, 5)
+
+    gz_low = min(fib_50_0, fib_61_8)
+    gz_high = max(fib_50_0, fib_61_8)
+    if gz_low == gz_high:
+        gz_high = round(gz_low + 0.00001, 5)
+
+    return {
+        "available":        True,
+        "swing_start":      round(swing_start, 5),
+        "swing_end":        round(swing_end,   5),
+        "fib_38_2":         fib_38_2,
+        "fib_50_0":         fib_50_0,
+        "fib_61_8":         fib_61_8,
+        "golden_zone_low":  gz_low,
+        "golden_zone_high": gz_high,
+    }
+
+
 # ─────────────────────────────────────────────────────────────────────────────
-# 3. V2 Indicators
+# 6. Technical Indicators & Candle Analysis
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _ema(series: pd.Series, period: int) -> pd.Series:
@@ -310,12 +707,7 @@ def _ema(series: pd.Series, period: int) -> pd.Series:
 
 
 def _atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
-    """
-    Average True Range (Wilder smoothing).
-
-    TR = max(H-L, |H-prev_C|, |L-prev_C|)
-    ATR = Wilder smoothed TR (equivalent to EMA with alpha=1/period)
-    """
+    """Average True Range (Wilder smoothing)."""
     high  = df["high"]
     low   = df["low"]
     close = df["close"]
@@ -326,79 +718,42 @@ def _atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
         axis=1,
     ).max(axis=1)
 
-    # Wilder smoothing = EMA with span = 2*period - 1
     return tr.ewm(alpha=1 / period, adjust=False).mean()
 
 
-def _fibonacci_zones(
-    swing_highs: np.ndarray,
-    swing_lows: np.ndarray,
-    trend: str,
-) -> dict[str, Any]:
+def _rsi(series: pd.Series, period: int = 14) -> pd.Series:
+    """Relative Strength Index (Wilder smoothing) — pure pandas."""
+    delta = series.diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.ewm(alpha=1 / period, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1 / period, adjust=False).mean()
+    rs = avg_gain / (avg_loss + 1e-10)
+    return 100 - (100 / (1 + rs))
+
+
+def _analyse_candle(df: pd.DataFrame, candle_index: int = -1) -> dict[str, Any]:
     """
-    Calculate Fibonacci retracement levels from the most recent swing leg.
-
-    For UPTREND  : leg = most recent swing low  → swing high
-    For DOWNTREND: leg = most recent swing high → swing low
-
-    Returns the 38.2%, 50%, 61.8% (Golden Zone) retracement prices.
-    """
-    if len(swing_highs) == 0 or len(swing_lows) == 0:
-        return {"available": False, "reason": "Insufficient swing data."}
-
-    if trend == "UPTREND":
-        swing_start = float(swing_lows[-1])
-        swing_end   = float(swing_highs[-1])
-    elif trend == "DOWNTREND":
-        swing_start = float(swing_highs[-1])
-        swing_end   = float(swing_lows[-1])
-    else:
-        return {"available": False, "reason": "RANGING — Fibonacci not applicable."}
-
-    leg = swing_end - swing_start
-
-    return {
-        "available":    True,
-        "swing_start":  round(swing_start, 5),
-        "swing_end":    round(swing_end,   5),
-        "fib_38_2":     round(swing_end - 0.382 * leg, 5),
-        "fib_50_0":     round(swing_end - 0.500 * leg, 5),
-        "fib_61_8":     round(swing_end - 0.618 * leg, 5),
-        "golden_zone_low":  round(swing_end - 0.618 * leg, 5),
-        "golden_zone_high": round(swing_end - 0.500 * leg, 5),
-    }
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 4. 15m Candle Story
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _analyse_candle(df: pd.DataFrame, candle_index: int = -2) -> dict[str, Any]:
-    """
-    Analyse a single closed 15m candle for significant patterns.
-
-    Candle anatomy:
-      body      = abs(close - open)
-      upper_wick = high - max(open, close)
-      lower_wick = min(open, close) - low
-      full_range = high - low
-
-    Returns metrics and human-readable pattern label.
+    Analyse a single closed 15m candle for anatomical ratios and candlestick patterns.
+    Enforces strict opposite-color and real body engulfing detection.
     """
     if len(df) < abs(candle_index):
         return {"available": False, "reason": "Not enough candles."}
 
-    candle   = df.iloc[candle_index]
-    o, h, l, c = float(candle["open"]), float(candle["high"]), float(candle["low"]), float(candle["close"])
-    full_range  = h - l if h != l else 1e-10
+    candle = df.iloc[candle_index]
+    o = float(candle["open"])
+    h = float(candle["high"])
+    l = float(candle["low"])
+    c = float(candle["close"])
+    full_range = h - l if h != l else 1e-10
 
-    body        = abs(c - o)
-    upper_wick  = h - max(o, c)
-    lower_wick  = min(o, c) - l
-    is_bullish  = c > o
-    body_pct    = body / full_range
-    upper_pct   = upper_wick / full_range
-    lower_pct   = lower_wick / full_range
+    body = abs(c - o)
+    upper_wick = h - max(o, c)
+    lower_wick = min(o, c) - l
+    is_bullish = c > o
+    body_pct = body / full_range
+    upper_pct = upper_wick / full_range
+    lower_pct = lower_wick / full_range
 
     # Pattern detection
     pattern = "NEUTRAL"
@@ -417,28 +772,60 @@ def _analyse_candle(df: pd.DataFrame, candle_index: int = -2) -> dict[str, Any]:
     elif body_pct >= 0.7 and not is_bullish:
         pattern = "STRONG_BEARISH_MARUBOZU"
 
-    # Check for engulfing vs prior candle
+    # Strict Engulfing: opposite candle colors AND real open/close engulfment
     engulfing = "NONE"
-    if len(df) > abs(candle_index) + 1:
-        prev        = df.iloc[candle_index - 1]
-        prev_body   = abs(float(prev["close"]) - float(prev["open"]))
-        if body > prev_body:
-            engulfing = "BULLISH_ENGULFING" if is_bullish else "BEARISH_ENGULFING"
+    if len(df) >= abs(candle_index) + 1:
+        prev = df.iloc[candle_index - 1]
+        prev_o = float(prev["open"])
+        prev_c = float(prev["close"])
+        if prev_c < prev_o and c > o and o <= prev_c and c >= prev_o:
+            engulfing = "BULLISH_ENGULFING"
+        elif prev_c > prev_o and c < o and o >= prev_c and c <= prev_o:
+            engulfing = "BEARISH_ENGULFING"
 
     return {
-        "available":    True,
-        "timestamp":    str(df.index[candle_index]),
-        "open":         round(o, 5),
-        "high":         round(h, 5),
-        "low":          round(l, 5),
-        "close":        round(c, 5),
-        "is_bullish":   is_bullish,
-        "body_pct":     round(body_pct,   3),
+        "available":      True,
+        "timestamp":      str(df.index[candle_index]),
+        "open":           round(o, 5),
+        "high":           round(h, 5),
+        "low":            round(l, 5),
+        "close":          round(c, 5),
+        "is_bullish":     is_bullish,
+        "body_pct":       round(body_pct,  3),
         "upper_wick_pct": round(upper_pct, 3),
         "lower_wick_pct": round(lower_pct, 3),
-        "pattern":      pattern,
-        "engulfing":    engulfing,
+        "pattern":        pattern,
+        "engulfing":      engulfing,
     }
+
+
+def _evaluate_candle_quality(candle_story: dict[str, Any], trend: str) -> str:
+    """
+    Compute directional candle quality: 'STRONG', 'MODERATE', or 'NONE'.
+    """
+    if trend == "RANGING" or not candle_story.get("available", False):
+        return "NONE"
+
+    is_bullish = candle_story.get("is_bullish", False)
+    body_pct = float(candle_story.get("body_pct", 0.0))
+    upper_wick_pct = float(candle_story.get("upper_wick_pct", 0.0))
+    lower_wick_pct = float(candle_story.get("lower_wick_pct", 0.0))
+    engulfing = candle_story.get("engulfing", "NONE")
+
+    if trend == "UPTREND":
+        if is_bullish and (body_pct >= 0.45 or lower_wick_pct >= 0.55 or engulfing == "BULLISH_ENGULFING"):
+            return "STRONG"
+        elif is_bullish and (body_pct >= 0.25 or lower_wick_pct >= 0.40):
+            return "MODERATE"
+        return "NONE"
+    elif trend == "DOWNTREND":
+        if (not is_bullish) and (body_pct >= 0.45 or upper_wick_pct >= 0.55 or engulfing == "BEARISH_ENGULFING"):
+            return "STRONG"
+        elif (not is_bullish) and (body_pct >= 0.25 or upper_wick_pct >= 0.40):
+            return "MODERATE"
+        return "NONE"
+
+    return "NONE"
 
 
 def _last_n_candles(df: pd.DataFrame, n: int = 10) -> list[dict]:
@@ -447,53 +834,90 @@ def _last_n_candles(df: pd.DataFrame, n: int = 10) -> list[dict]:
     records = []
     for ts, row in tail.iterrows():
         records.append({
-            "time":  str(ts),
-            "open":  round(float(row["open"]),  5),
-            "high":  round(float(row["high"]),  5),
-            "low":   round(float(row["low"]),   5),
-            "close": round(float(row["close"]), 5),
+            "time":    str(ts),
+            "open":    round(float(row["open"]),  5),
+            "high":    round(float(row["high"]),  5),
+            "low":     round(float(row["low"]),   5),
+            "close":   round(float(row["close"]), 5),
             "bullish": bool(row["close"] > row["open"]),
         })
     return records
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 5. Risk & Position Sizing
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _rsi(series: pd.Series, period: int = 14) -> pd.Series:
-    """Relative Strength Index (Wilder smoothing) — pure pandas."""
-    delta = series.diff()
-    gain = delta.clip(lower=0)
-    loss = -delta.clip(upper=0)
-    avg_gain = gain.ewm(alpha=1 / period, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1 / period, adjust=False).mean()
-    rs = avg_gain / (avg_loss + 1e-10)
-    return 100 - (100 / (1 + rs))
-
-
 def _get_session_tag() -> str:
     """
-    Categorise current market session in Africa/Addis_Ababa (EAT):
-      - 09:30–15:00 EAT: LONDON_OPEN
-      - 15:00–18:00 EAT: LONDON_NY_OVERLAP
-      - 18:00–19:30 EAT: NY_AFTERNOON
-      - Outside: OFF_HOURS
+    Categorise current market session using real Europe/London and America/New_York
+    timezones (automatically DST-aware):
+      - LONDON_NY_OVERLAP: London 07:00–17:00 and NY 08:00–17:00
+      - LONDON_OPEN:       London 07:00–17:00 before NY open (NY < 08:00)
+      - NY_AFTERNOON:      NY 08:00–16:00 after London close (London >= 17:00)
+      - OFF_HOURS:         otherwise (including on exception)
     """
     try:
         import pytz
         from datetime import datetime, time as dtime
-        eat_tz = pytz.timezone(config.TIMEZONE)
-        now = datetime.now(tz=eat_tz).time()
-        if dtime(9, 30) <= now < dtime(15, 0):
-            return "LONDON_OPEN"
-        elif dtime(15, 0) <= now < dtime(18, 0):
+        now_utc = datetime.now(pytz.utc)
+
+        london_tz = pytz.timezone("Europe/London")
+        ny_tz = pytz.timezone("America/New_York")
+
+        london_time = now_utc.astimezone(london_tz).time()
+        ny_time = now_utc.astimezone(ny_tz).time()
+
+        in_london = dtime(7, 0) <= london_time < dtime(17, 0)
+        in_ny_overlap = dtime(8, 0) <= ny_time < dtime(17, 0)
+        in_ny_afternoon = dtime(8, 0) <= ny_time < dtime(16, 0)
+
+        if in_london and in_ny_overlap:
             return "LONDON_NY_OVERLAP"
-        elif dtime(18, 0) <= now <= dtime(19, 30):
+        elif in_london and ny_time < dtime(8, 0):
+            return "LONDON_OPEN"
+        elif (not in_london or london_time >= dtime(17, 0)) and in_ny_afternoon:
             return "NY_AFTERNOON"
         return "OFF_HOURS"
     except Exception:
-        return "LONDON_OPEN"
+        return "OFF_HOURS"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 7. Position Sizing, Pair-Aware Pip Value & Risk Calculation
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _get_pip_value_usd(symbol: str, current_price: float) -> float:
+    """
+    Return exact live USD value of 1 pip for 1 standard lot (100,000 units)
+    using live cross-rate algebra from scanned majors (zero extra API calls).
+    """
+    clean_sym = symbol.split(" ")[0].upper()
+    parts = clean_sym.split("/")
+    if len(parts) != 2:
+        return 10.0
+
+    base, quote = parts[0], parts[1]
+    pip_mult = 1000.0 if quote == "JPY" else 10.0
+
+    if quote == "USD":
+        return 10.0
+    if base == "USD" and current_price > 0:
+        return pip_mult / current_price
+
+    # Live cross derivation: e.g. GBP/AUD -> 10 * (GBP/USD / GBP/AUD); EUR/JPY -> 1000 * (EUR/USD / EUR/JPY)
+    base_usd_key = f"{base}/USD"
+    if base_usd_key in _LATEST_FX_RATES and current_price > 0:
+        return pip_mult * (_LATEST_FX_RATES[base_usd_key] / current_price)
+
+    if quote == "JPY":
+        usd_jpy = _LATEST_FX_RATES.get("USD/JPY", 159.0)
+        return 1000.0 / usd_jpy if usd_jpy > 0 else 10.0
+    if quote == "AUD":
+        return 10.0 * _LATEST_FX_RATES.get("AUD/USD", 0.657)
+    if quote == "NZD":
+        return 10.0 * _LATEST_FX_RATES.get("NZD/USD", 0.550)
+    if quote == "CHF":
+        usd_chf = _LATEST_FX_RATES.get("USD/CHF", 0.880)
+        return 10.0 / usd_chf if usd_chf > 0 else 10.0
+
+    return 10.0
 
 
 def _calculate_risk(
@@ -502,106 +926,132 @@ def _calculate_risk(
     current_price: float,
     nearest_support: dict | None,
     nearest_resistance: dict | None,
-    atr: float,
+    near_static_zone: bool,
+    in_value_area: bool,
+    atr_15m: float,
+    atr_1h: float,
+    ema50_last: float,
+    df_15m: pd.DataFrame,
 ) -> dict[str, Any]:
     """
     Calculate stop-loss, take-profit, R:R ratio, and position size.
-
-    Stop-Loss:  placed just outside the S/R zone + 0.5 * ATR + 2-pip spread cushion
-                (0.0002 for standard pairs, 0.02 for JPY pairs).
-    Take-Profit: placed just before the opposing S/R zone.
-
-    Position size expressed in:
-      - Standard Lots (position_size_lots):  round(units / 100_000, 2), min 0.01
-        → use this for MetaTrader 5 order submissions (0.01 lot = 1,000 units)
-      - Micro Lots   (position_size_micro_lots): round(units / 1_000, 2)
-        → informational; useful for position sizing reference
-
-    Returns dict with all risk metrics.
+    Enforces pair-aware pip values, structural SL/TP, and a strict 1.0x risk cap.
     """
     pip_size = 0.01 if "JPY" in symbol else 0.0001
     max_risk_usd = round(config.ACCOUNT_BALANCE * config.MAX_RISK_PERCENT, 2)
-    # ── SPREAD CUSHION: 0.5 × ATR + 2-pip spread buffer ──────────────────────
-    atr_buffer   = 0.5 * atr + (2 * pip_size)
+    atr_buffer = 0.5 * atr_15m + (2 * pip_size)
+    pip_value_usd = _get_pip_value_usd(symbol, current_price)
 
-    out: dict[str, Any] = {
-        "account_balance": config.ACCOUNT_BALANCE,
-        "max_risk_usd":    max_risk_usd,
-        "atr_buffer":      round(atr_buffer, 5),
-    }
+    closed_15m = df_15m.iloc[:-1]
+    recent_slice = closed_15m.iloc[-6:] if len(closed_15m) >= 6 else closed_15m
+    recent_high = float(recent_slice["high"].max())
+    recent_low = float(recent_slice["low"].min())
 
-    if trend == "UPTREND" and nearest_support:
-        # Long setup: buy near support, stop below it
-        entry       = current_price
-        stop_loss   = nearest_support["zone_low"] - atr_buffer
-        take_profit = (
-            nearest_resistance["price"] - (2 * pip_size)
-            if nearest_resistance
-            else entry + 3 * (entry - stop_loss)  # fallback: 1:3 R:R
-        )
+    if trend == "UPTREND" and in_value_area:
         direction = "LONG"
+        entry = current_price
 
-    elif trend == "DOWNTREND" and nearest_resistance:
-        # Short setup: sell near resistance, stop above it
-        entry       = current_price
-        stop_loss   = nearest_resistance["zone_high"] + atr_buffer
-        take_profit = (
-            nearest_support["price"] + (2 * pip_size)
-            if nearest_support
-            else entry - 3 * (stop_loss - entry)  # fallback: 1:3 R:R
-        )
+        # SL Anchor
+        if near_static_zone and nearest_support:
+            stop_loss = nearest_support["zone_low"] - atr_buffer
+        else:
+            stop_loss = min(recent_low, ema50_last) - atr_buffer
+
+        risk_distance = entry - stop_loss
+        if risk_distance <= 2 * pip_size:
+            stop_loss = entry - max(risk_distance, 5 * pip_size)
+            risk_distance = entry - stop_loss
+
+        # TP Placement
+        if nearest_resistance and (nearest_resistance["price"] - entry) >= 1.0 * atr_1h:
+            take_profit = nearest_resistance["price"] - (2 * pip_size)
+            tp_source = "SR_ZONE"
+        else:
+            fallback_dist = min(2.2 * risk_distance, 2.5 * atr_1h)
+            take_profit = entry + fallback_dist
+            tp_source = "ATR_STRUCTURAL"
+
+    elif trend == "DOWNTREND" and in_value_area:
         direction = "SHORT"
+        entry = current_price
+
+        # SL Anchor
+        if near_static_zone and nearest_resistance:
+            stop_loss = nearest_resistance["zone_high"] + atr_buffer
+        else:
+            stop_loss = max(recent_high, ema50_last) + atr_buffer
+
+        risk_distance = stop_loss - entry
+        if risk_distance <= 2 * pip_size:
+            stop_loss = entry + max(risk_distance, 5 * pip_size)
+            risk_distance = stop_loss - entry
+
+        # TP Placement
+        if nearest_support and (entry - nearest_support["price"]) >= 1.0 * atr_1h:
+            take_profit = nearest_support["price"] + (2 * pip_size)
+            tp_source = "SR_ZONE"
+        else:
+            fallback_dist = min(2.2 * risk_distance, 2.5 * atr_1h)
+            take_profit = entry - fallback_dist
+            tp_source = "ATR_STRUCTURAL"
 
     else:
-        # No valid setup
-        out.update({
-            "direction":                 "NONE",
-            "entry_price":               None,
-            "stop_loss":                 None,
-            "take_profit":               None,
-            "risk_pips":                 None,
-            "reward_pips":               None,
-            "risk_reward_ratio":         0.0,
-            "position_size_lots":        None,   # Standard Lots for MT5
-            "position_size_micro_lots":  None,   # Micro lots (informational)
-            "position_size_units":       None,
-        })
-        return out
+        # No valid trade setup
+        return {
+            "account_balance":          config.ACCOUNT_BALANCE,
+            "max_risk_usd":             max_risk_usd,
+            "atr_buffer":               round(atr_buffer, 5),
+            "direction":                "NONE",
+            "entry_price":              None,
+            "stop_loss":                None,
+            "take_profit":              None,
+            "risk_pips":                None,
+            "reward_pips":              None,
+            "risk_reward_ratio":        0.0,
+            "position_size_lots":       None,
+            "position_size_micro_lots": None,
+            "position_size_units":      None,
+            "pip_value_usd":            round(pip_value_usd, 4),
+            "actual_risk_usd":          0.0,
+            "risk_cap_exceeded":        False,
+            "tp_source":                "NONE",
+        }
 
-    # Pip values (absolute distance)
+    # Reward & Sizing Calculations
     if direction == "LONG":
-        risk_pips   = entry - stop_loss
-        reward_pips = take_profit - entry
+        reward_distance = take_profit - entry
     else:
-        risk_pips   = stop_loss - entry
-        reward_pips = entry - take_profit
+        reward_distance = entry - take_profit
 
-    risk_pips   = max(risk_pips, 1e-5)
-    reward_pips = max(reward_pips, 0)
-    rr_ratio    = reward_pips / risk_pips
+    reward_distance = max(reward_distance, 0.0)
+    rr_ratio = round(reward_distance / max(risk_distance, 1e-5), 2)
 
-    # ── Position sizing ───────────────────────────────────────────────────────
-    # Standard lot pip value: ~$10 per pip for 100k units
-    pip_value_per_standard_lot = 10.0
-    pips_at_risk    = risk_pips / pip_size
-    position_size_units = max_risk_usd / (pips_at_risk * pip_value_per_standard_lot) * 100_000
+    pips_at_risk = risk_distance / pip_size
+    raw_lots = max_risk_usd / (pips_at_risk * pip_value_usd)
+    floored_lots = math.floor(raw_lots * 100.0) / 100.0
+    std_lots = max(floored_lots, 0.01)
+    position_size_units = int(round(std_lots * 100_000))
+    micro_lots = round(std_lots * 100.0, 2)
 
-    # Standard Lots: used directly in MT5 (minimum 0.01)
-    std_lots   = max(round(position_size_units / 100_000, 2), 0.01)
-    # Micro Lots: informational reference
-    micro_lots = round(position_size_units / 1_000, 2)
+    actual_risk_usd = round(std_lots * pips_at_risk * pip_value_usd, 2)
+    risk_cap_exceeded = bool(actual_risk_usd > max_risk_usd)
 
-    out.update({
+    return {
+        "account_balance":          config.ACCOUNT_BALANCE,
+        "max_risk_usd":             max_risk_usd,
+        "atr_buffer":               round(atr_buffer, 5),
         "direction":                direction,
         "entry_price":              round(entry,       5),
         "stop_loss":                round(stop_loss,   5),
         "take_profit":              round(take_profit, 5),
-        "risk_pips":                round(risk_pips / pip_size,   1),
-        "reward_pips":              round(reward_pips / pip_size, 1),
-        "risk_reward_ratio":        round(rr_ratio, 2),
-        "position_size_lots":       std_lots,            # Standard Lots → MT5 orders
-        "position_size_micro_lots": micro_lots,          # Micro Lots → informational
+        "risk_pips":                round(risk_distance / pip_size,   1),
+        "reward_pips":              round(reward_distance / pip_size, 1),
+        "risk_reward_ratio":        rr_ratio,
+        "position_size_lots":       std_lots,
+        "position_size_micro_lots": micro_lots,
         "position_size_units":      int(position_size_units),
-    })
-
-    return out
+        "pip_value_usd":            round(pip_value_usd, 4),
+        "actual_risk_usd":          actual_risk_usd,
+        "risk_cap_exceeded":        risk_cap_exceeded,
+        "tp_source":                tp_source,
+    }
