@@ -140,5 +140,37 @@
     "risk_reward": 2.2,
     "risk_usd": 10.0,
     "status": "PENDING"
+  },
+  "f2e082d2-d3a9-4b1c-bd34-fc4808f60839": {
+    "signal_id": "f2e082d2-d3a9-4b1c-bd34-fc4808f60839",
+    "timestamp_eat": "2026-11-25 18:31:44",
+    "timestamp_iso": "2026-11-25T18:31:44.635786+03:00",
+    "pair": "GBP/JPY",
+    "direction": "ENTER_SHORT",
+    "entry": 207.88515,
+    "stop_loss": 208.46294,
+    "take_profit": 207.06382,
+    "standard_lots": 0.02,
+    "units": 2000,
+    "confluence_score": 65,
+    "risk_reward": 1.42,
+    "risk_usd": 10.0,
+    "status": "PENDING"
+  },
+  "712295a9-d93b-4fdf-93ab-df489b018144": {
+    "signal_id": "712295a9-d93b-4fdf-93ab-df489b018144",
+    "timestamp_eat": "2026-11-25 18:32:26",
+    "timestamp_iso": "2026-11-25T18:32:26.775834+03:00",
+    "pair": "GBP/NZD",
+    "direction": "ENTER_LONG",
+    "entry": 2.39452,
+    "stop_loss": 2.39134,
+    "take_profit": 2.40151,
+    "standard_lots": 0.05,
+    "units": 5000,
+    "confluence_score": 65,
+    "risk_reward": 2.2,
+    "risk_usd": 10.0,
+    "status": "PENDING"
   }
 }
