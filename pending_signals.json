@@ -12,5 +12,21 @@
     "units": 3442,
     "confluence_score": 76,
     "status": "CLOSED_SHADOW_LOSS"
+  },
+  "0d94fd55-a45d-44f8-bf56-9091cf9a999c": {
+    "signal_id": "0d94fd55-a45d-44f8-bf56-9091cf9a999c",
+    "timestamp_eat": "2026-11-25 16:46:00",
+    "timestamp_iso": "2026-11-25T16:46:00.410384+03:00",
+    "pair": "GBP/USD",
+    "direction": "ENTER_LONG",
+    "entry": 1.3071,
+    "stop_loss": 1.30521,
+    "take_profit": 1.31063,
+    "standard_lots": 0.05,
+    "units": 5000,
+    "confluence_score": 65,
+    "risk_reward": 1.87,
+    "risk_usd": 10.0,
+    "status": "WAITING_MANUAL"
   }
 }
