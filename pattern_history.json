@@ -14,7 +14,7 @@
     "news_bias": "BULLISH",
     "confluence_score": 76,
     "session_tag": "LONDON_OPEN",
-    "outcome": "PENDING",
-    "pnl_usd": 0.0
+    "outcome": "SHADOW_LOSS",
+    "pnl_usd": -10.0
   }
 }
