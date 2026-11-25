@@ -76,5 +76,21 @@
     "risk_reward": 1.47,
     "risk_usd": 10.0,
     "status": "DECLINED"
+  },
+  "cead5dda-f6a4-4039-98d4-8d39c4c3b137": {
+    "signal_id": "cead5dda-f6a4-4039-98d4-8d39c4c3b137",
+    "timestamp_eat": "2026-11-25 17:46:29",
+    "timestamp_iso": "2026-11-25T17:46:29.906467+03:00",
+    "pair": "GBP/NZD",
+    "direction": "ENTER_LONG",
+    "entry": 2.39256,
+    "stop_loss": 2.38913,
+    "take_profit": 2.40011,
+    "standard_lots": 0.05,
+    "units": 5000,
+    "confluence_score": 65,
+    "risk_reward": 2.2,
+    "risk_usd": 10.0,
+    "status": "PENDING"
   }
 }
