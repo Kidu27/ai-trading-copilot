@@ -178,3 +178,5 @@ timestamp_eat,signal_id,pair,decision,confluence_score,entry_price,stop_loss,tak
 2026-11-24 19:46:23,900538ac-b8d0-47ff-8db0-365bec449ee4,AUD/USD,NO_TRADE,0,,,,,,,OPEN,,,,
 2026-11-24 19:46:42,1512a01b-bed1-48e5-b79b-c7ebdd09bc99,EUR/JPY,NO_TRADE,0,,,,0.01,,,OPEN,,,,
 2026-11-24 19:47:00,6d5e4001-36c5-4ad9-96fb-f8df218a3f7e,GBP/JPY,NO_TRADE,0,,,,0.01,,,OPEN,,,,
+2026-11-25 10:36:38,2f0535b4-7dfa-44e1-aa7a-3e7ed67a0c09,EUR/USD,NO_TRADE,0,,,,,,,OPEN,,,,
+2026-11-25 10:36:56,11d92beb-f89a-4b41-ab3c-c4fd67bfd267,GBP/USD,NO_TRADE,0,,,,,,,OPEN,,,,
