@@ -370,3 +370,5 @@ timestamp_eat,signal_id,pair,decision,confluence_score,entry_price,stop_loss,tak
 2026-11-25 17:15:58,bfbff1fa-f765-4baf-9357-aa11e0a12aef,USD/JPY,NO_TRADE,0,,,,,,,OPEN,,,,
 2026-11-25 17:16:17,3d87d00a-4bd1-45bf-9c54-9e9796e0f4ea,EUR/JPY,NO_TRADE,0,,,,,,,OPEN,,,,
 2026-11-25 17:16:35,702c1bcf-6552-4849-9cbb-746fd2229fd3,GBP/JPY,NO_TRADE,0,,,,,,,OPEN,,,,
+2026-11-25 17:16:54,6a7e13b5-994c-4a53-9828-4b337e59e7c5,GBP/AUD,NO_TRADE,0,,,,,,,OPEN,,,,
+2026-11-25 17:17:16,c5557ac4-760a-4faf-bb5a-dbfe17a2042b,GBP/NZD,SHADOW_LONG,60,2.39368,2.39239,2.39651,0.14,2.2,10.0,SHADOW_LOSS,2.39239,2026-11-25 18:15:00,-10.0,Automated candle detection (SHADOW SIGNAL (MISSED/UNENTERED)): LOSS hit
