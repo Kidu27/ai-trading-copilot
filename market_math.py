@@ -73,7 +73,7 @@ def analyse(
     result["nearest_resistance"] = nearest_resistance
 
     zone_proximity = max(1.5 * atr_1h, 20 * pip_size)
-    near_zone = _is_near_zone(current_price, nearest_support, nearest_resistance, proximity_pips=zone_proximity)
+    near_zone = _is_near_zone(current_price, nearest_support, nearest_resistance, proximity_pips=zone_proximity, trend=trend)
     result["price_near_key_zone"] = near_zone
     if not near_zone:
         result["passed_math_gate"] = False
@@ -266,19 +266,19 @@ def _cluster_zones(
 
 
 def _nearest_below(zones: list[dict], price: float) -> dict[str, Any] | None:
-    """Return the strongest zone strictly below `price`."""
+    """Return the nearest S/R zone strictly below `price`."""
     candidates = [z for z in zones if z["price"] < price]
     if not candidates:
         return None
-    return max(candidates, key=lambda z: (z["touch_count"], z["price"]))
+    return max(candidates, key=lambda z: (z["price"], z["touch_count"]))
 
 
 def _nearest_above(zones: list[dict], price: float) -> dict[str, Any] | None:
-    """Return the strongest zone strictly above `price`."""
+    """Return the nearest S/R zone strictly above `price`."""
     candidates = [z for z in zones if z["price"] > price]
     if not candidates:
         return None
-    return max(candidates, key=lambda z: (z["touch_count"], -z["price"]))
+    return min(candidates, key=lambda z: (z["price"], -z["touch_count"]))
 
 
 def _is_near_zone(
@@ -286,8 +286,13 @@ def _is_near_zone(
     support: dict | None,
     resistance: dict | None,
     proximity_pips: float = 0.0030,
+    trend: str = "RANGING",
 ) -> bool:
-    """True if price is within `proximity_pips` of either zone."""
+    """True if price is within `proximity_pips` of the trend-aligned S/R zone."""
+    if trend == "UPTREND":
+        return bool(support and abs(price - support["price"]) <= proximity_pips)
+    if trend == "DOWNTREND":
+        return bool(resistance and abs(resistance["price"] - price) <= proximity_pips)
     if support and abs(price - support["price"]) <= proximity_pips:
         return True
     if resistance and abs(resistance["price"] - price) <= proximity_pips:
