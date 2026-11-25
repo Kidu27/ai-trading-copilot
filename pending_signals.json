@@ -60,5 +60,21 @@
     "risk_reward": 1.52,
     "risk_usd": 10.0,
     "status": "MANUAL"
+  },
+  "83126820-1a91-48a4-aec2-645664cca244": {
+    "signal_id": "83126820-1a91-48a4-aec2-645664cca244",
+    "timestamp_eat": "2026-11-25 17:31:16",
+    "timestamp_iso": "2026-11-25T17:31:16.060315+03:00",
+    "pair": "GBP/AUD",
+    "direction": "ENTER_LONG",
+    "entry": 1.9843,
+    "stop_loss": 1.97795,
+    "take_profit": 1.99362,
+    "standard_lots": 0.02,
+    "units": 2000,
+    "confluence_score": 65,
+    "risk_reward": 1.47,
+    "risk_usd": 10.0,
+    "status": "PENDING"
   }
 }
