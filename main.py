@@ -33,6 +33,7 @@ import ai_auditor
 import notifier
 import journal
 import post_mortem
+import pattern_stats
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -150,11 +151,62 @@ def run_scan() -> None:
             decision = "NO_TRADE"
 
         # GATE 4: Log + notify
-        journal.log_setup(symbol, math_result, ai_result)
+        min_confluence = getattr(config, "get_min_confluence_score", lambda: config.MIN_CONFLUENCE_SCORE)()
+        is_shadow = (
+            gate2_pass
+            and decision == "NO_TRADE"
+            and (50 <= score < min_confluence)
+            and not ai_result.get("_fail_safe")
+        )
+
+        if is_shadow:
+            shadow_dir = "SHADOW_LONG" if "LONG" in str(math_result.get("direction", "")).upper() else "SHADOW_SHORT"
+            ai_result["decision"] = shadow_dir
+            decision = shadow_dir
+            print(f"  [Gate 3] Tagged as shadow candidate: {decision} ({score}/100) — learning silently.")
+
+            # Ensure trade_plan has entry, SL, TP levels from math_result so outcome_tracker can evaluate it
+            tp = ai_result.setdefault("trade_plan", {})
+            if not tp.get("entry"):
+                tp["entry"] = math_result.get("entry_price")
+            if not tp.get("stop_loss"):
+                tp["stop_loss"] = math_result.get("stop_loss")
+            if not tp.get("take_profit"):
+                tp["take_profit"] = math_result.get("take_profit")
+            if not tp.get("risk_reward"):
+                tp["risk_reward"] = math_result.get("risk_reward_ratio")
+            if not tp.get("risk_usd"):
+                tp["risk_usd"] = math_result.get("max_risk_usd")
+            if not tp.get("lots"):
+                tp["lots"] = math_result.get("position_size_lots")
+
+            journal.log_setup(
+                symbol,
+                math_result,
+                ai_result,
+                outcome="SHADOW_OPEN",
+                notes=f"Shadow candidate ({score}/100)",
+            )
+
+            pattern_stats.record_fingerprint(
+                signal_id=math_result["signal_id"],
+                pair=symbol,
+                direction=shadow_dir,
+                math_result=math_result,
+                ai_result=ai_result,
+                news_bias=ai_result.get("news_bias", "NEUTRAL"),
+                outcome="SHADOW_PENDING",
+                pnl_usd=0.0,
+                is_shadow_candidate=True,
+            )
+        else:
+            journal.log_setup(symbol, math_result, ai_result)
 
         # 3-tier notification filter
         notify_mode = getattr(config, "NOTIFY_MODE", "GATE2_ONLY").upper()
-        if notify_mode == "ALL":
+        if decision in ("SHADOW_LONG", "SHADOW_SHORT"):
+            should_alert = (notify_mode == "ALL")
+        elif notify_mode == "ALL":
             should_alert = True
         elif notify_mode == "GATE2_ONLY":
             should_alert = gate2_pass or decision in ("ENTER_LONG", "ENTER_SHORT")

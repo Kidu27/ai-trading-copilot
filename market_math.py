@@ -59,8 +59,12 @@ def analyse(
     current_price = float(df_1h["close"].iloc[-1])
     result["current_price"] = round(current_price, 5)
 
+    atr_1h = float(_atr(df_1h, period=14).iloc[-1])
+    result["atr_1h"] = round(atr_1h, 5)
+
     all_pivots = list(swing_highs) + list(swing_lows)
-    zones      = _cluster_zones(all_pivots, tolerance_pips=10 * pip_size)
+    zone_tolerance = max(0.6 * atr_1h, 8 * pip_size)
+    zones      = _cluster_zones(all_pivots, tolerance_pips=zone_tolerance)
     result["sr_zones"] = zones
 
     nearest_support    = _nearest_below(zones, current_price)
@@ -68,7 +72,8 @@ def analyse(
     result["nearest_support"]    = nearest_support
     result["nearest_resistance"] = nearest_resistance
 
-    near_zone = _is_near_zone(current_price, nearest_support, nearest_resistance, proximity_pips=30 * pip_size)
+    zone_proximity = max(1.5 * atr_1h, 20 * pip_size)
+    near_zone = _is_near_zone(current_price, nearest_support, nearest_resistance, proximity_pips=zone_proximity)
     result["price_near_key_zone"] = near_zone
     if not near_zone:
         result["passed_math_gate"] = False
@@ -119,6 +124,29 @@ def analyse(
     last_10_candles = _last_n_candles(df_15m, n=10)
     result["last_10_candles_15m"] = last_10_candles
 
+    # Gate 2 Quality Checks (only when trend != RANGING and near_zone is True)
+    if trend != "RANGING" and near_zone:
+        # Structural Alignment
+        structural_aligned = (
+            (trend == "UPTREND" and result.get("ema_signal") == "BULLISH")
+            or (trend == "DOWNTREND" and result.get("ema_signal") == "BEARISH")
+            or bool(result.get("in_fib_golden_zone", False))
+        )
+        if not structural_aligned:
+            result["passed_math_gate"] = False
+            result["fail_reasons"].append("Neither 1H EMA 50/200 nor Fibonacci Golden Zone aligns with trend.")
+
+        # 15m Closed Candle Confirmation
+        candle_confirmed = (
+            candle_story.get("body_pct", 0) >= 0.40
+            or candle_story.get("upper_wick_pct", 0) >= 0.50
+            or candle_story.get("lower_wick_pct", 0) >= 0.50
+            or candle_story.get("engulfing", "NONE") != "NONE"
+        )
+        if not candle_confirmed:
+            result["passed_math_gate"] = False
+            result["fail_reasons"].append("15m closed candle lacks directional body or rejection wick.")
+
     # ── 5. Risk & Position Sizing (Hard Gate) ────────────────────────────────
     risk_metrics = _calculate_risk(
         symbol=symbol,
@@ -145,7 +173,7 @@ def analyse(
 # 1. Market Structure
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _find_swings(df: pd.DataFrame, left: int = 3, right: int = 3) -> tuple[np.ndarray, np.ndarray]:
+def _find_swings(df: pd.DataFrame, left: int = 5, right: int = 5) -> tuple[np.ndarray, np.ndarray]:
     """
     Detect swing highs and swing lows using a local pivot algorithm.
 
@@ -442,7 +470,7 @@ def _rsi(series: pd.Series, period: int = 14) -> pd.Series:
 def _get_session_tag() -> str:
     """
     Categorise current market session in Africa/Addis_Ababa (EAT):
-      - 10:30–15:00 EAT: LONDON_OPEN
+      - 09:30–15:00 EAT: LONDON_OPEN
       - 15:00–18:00 EAT: LONDON_NY_OVERLAP
       - 18:00–19:30 EAT: NY_AFTERNOON
       - Outside: OFF_HOURS
@@ -452,7 +480,7 @@ def _get_session_tag() -> str:
         from datetime import datetime, time as dtime
         eat_tz = pytz.timezone(config.TIMEZONE)
         now = datetime.now(tz=eat_tz).time()
-        if dtime(10, 30) <= now < dtime(15, 0):
+        if dtime(9, 30) <= now < dtime(15, 0):
             return "LONDON_OPEN"
         elif dtime(15, 0) <= now < dtime(18, 0):
             return "LONDON_NY_OVERLAP"

@@ -74,7 +74,7 @@ def check_open_signal_outcomes(candles_by_pair: dict[str, pd.DataFrame] | None =
         ts_str = row.get("timestamp_eat", "").strip()
 
         # Only evaluate actionable trade signals
-        if decision not in ("ENTER_LONG", "ENTER_SHORT"):
+        if decision not in ("ENTER_LONG", "ENTER_SHORT", "SHADOW_LONG", "SHADOW_SHORT"):
             continue
 
         # Skip already completed trades
@@ -161,7 +161,7 @@ def check_open_signal_outcomes(candles_by_pair: dict[str, pd.DataFrame] | None =
             c_high = float(candle.get("high", 0.0))
             c_low = float(candle.get("low", 0.0))
 
-            if decision == "ENTER_LONG":
+            if decision in ("ENTER_LONG", "SHADOW_LONG"):
                 if c_high >= tp:
                     hit_outcome = "WIN"
                     hit_price = tp
@@ -172,7 +172,7 @@ def check_open_signal_outcomes(candles_by_pair: dict[str, pd.DataFrame] | None =
                     hit_price = sl
                     hit_time_str = c_dt_eat.strftime("%Y-%m-%d %H:%M:%S")
                     break
-            elif decision == "ENTER_SHORT":
+            elif decision in ("ENTER_SHORT", "SHADOW_SHORT"):
                 if c_low <= tp:
                     hit_outcome = "WIN"
                     hit_price = tp
@@ -248,22 +248,23 @@ def check_open_signal_outcomes(candles_by_pair: dict[str, pd.DataFrame] | None =
             except Exception:
                 pass
 
-        # 4. Deliver Telegram summary card
-        card = (
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            "📡 AUTOMATED OUTCOME DETECTED\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"📌 Pair     : {pair}\n"
-            f"📊 Type     : {outcome_tag}\n"
-            f"🎯 Signal   : {decision}\n"
-            f"🏁 Result   : {emoji} {final_outcome} ({pnl_sign}${pnl_usd:.2f})\n"
-            f"💵 Levels   : Entry {entry} → Exit {hit_price}\n"
-            f"🛑 SL / TP  : {sl} / {tp}\n"
-            f"⏱  Time     : {hit_time_str} EAT\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            "🧠 Signal fingerprint integrated into Winning DNA pattern engine."
-        )
-        notifier.send_outcome_update(card)
+        # 4. Deliver Telegram summary card (suppressed for silent shadow candidates)
+        if not decision.startswith("SHADOW_"):
+            card = (
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "📡 AUTOMATED OUTCOME DETECTED\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"📌 Pair     : {pair}\n"
+                f"📊 Type     : {outcome_tag}\n"
+                f"🎯 Signal   : {decision}\n"
+                f"🏁 Result   : {emoji} {final_outcome} ({pnl_sign}${pnl_usd:.2f})\n"
+                f"💵 Levels   : Entry {entry} → Exit {hit_price}\n"
+                f"🛑 SL / TP  : {sl} / {tp}\n"
+                f"⏱  Time     : {hit_time_str} EAT\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "🧠 Signal fingerprint integrated into Winning DNA pattern engine."
+            )
+            notifier.send_outcome_update(card)
         print(f"  [outcome_tracker] {pair} signal {signal_id[:8]}… resolved as {final_outcome} (${pnl_usd})")
 
         # 5. If it was an entered trade, trigger post_mortem

@@ -57,6 +57,7 @@ def record_fingerprint(
     news_bias: str = "NEUTRAL",
     outcome: str = "OPEN",
     pnl_usd: float = 0.0,
+    is_shadow_candidate: bool = False,
 ) -> dict[str, Any]:
     """
     Save or update a comprehensive Indicator Fingerprint in pattern_history.json.
@@ -88,6 +89,7 @@ def record_fingerprint(
         "session_tag":        math_result.get("session_tag", "LONDON_OPEN"),
         "outcome":            outcome.upper(),
         "pnl_usd":            float(pnl_usd),
+        "is_shadow_candidate": is_shadow_candidate,
     }
 
     history[signal_id] = fingerprint
@@ -116,9 +118,9 @@ def get_win_signature_summary() -> str:
     Returns a structured summary string to inject into Gemini's system prompt.
     """
     history = load_pattern_history()
-    closed = [t for t in history.values() if t.get("outcome") in ("WIN", "LOSS")]
+    closed = [t for t in history.values() if t.get("outcome") in ("WIN", "LOSS", "SHADOW_WIN", "SHADOW_LOSS")]
 
-    if len(closed) < 3:
+    if len(closed) < 5:
         return (
             "- Baseline Winning DNA (preliminary): Prioritize entries where 15m RSI is in the 42–58 sweet spot, "
             "price is touching the Fibonacci Golden Zone (50%–61.8%), and 1H EMA 50/200 aligns with direction."
@@ -126,19 +128,19 @@ def get_win_signature_summary() -> str:
 
     # 1. Total Win Rate
     total = len(closed)
-    wins = [t for t in closed if t.get("outcome") == "WIN"]
+    wins = [t for t in closed if t.get("outcome") in ("WIN", "SHADOW_WIN")]
     overall_wr = round(len(wins) / total * 100, 1)
 
     # 2. Fib Golden Zone Win Rate
     fib_trades = [t for t in closed if t.get("in_fib_golden_zone")]
-    fib_wins = [t for t in fib_trades if t.get("outcome") == "WIN"]
+    fib_wins = [t for t in fib_trades if t.get("outcome") in ("WIN", "SHADOW_WIN")]
     fib_wr = round(len(fib_wins) / len(fib_trades) * 100, 1) if fib_trades else None
 
     # 3. Session Tag Win Rate
     session_stats: dict[str, list[bool]] = {}
     for t in closed:
         s = t.get("session_tag", "LONDON_OPEN")
-        session_stats.setdefault(s, []).append(t.get("outcome") == "WIN")
+        session_stats.setdefault(s, []).append(t.get("outcome") in ("WIN", "SHADOW_WIN"))
 
     best_session = None
     best_session_wr = -1.0
@@ -159,20 +161,20 @@ def get_win_signature_summary() -> str:
         rsi_clause = "RSI 14 (15m) in healthy 40–60 pullback zone"
 
     # 5. Top winning candle patterns
-    pattern_stats: dict[str, list[bool]] = {}
+    pat_stats: dict[str, list[bool]] = {}
     for t in closed:
         p = t.get("candle_pattern", "NEUTRAL")
-        pattern_stats.setdefault(p, []).append(t.get("outcome") == "WIN")
+        pat_stats.setdefault(p, []).append(t.get("outcome") in ("WIN", "SHADOW_WIN"))
 
     winning_patterns = []
-    for p, res in pattern_stats.items():
-        if p != "NEUTRAL" and len(res) >= 1:
+    for p, res in pat_stats.items():
+        if p != "NEUTRAL" and len(res) >= 3:
             p_wr = sum(res) / len(res) * 100
             if p_wr >= 50.0:
                 winning_patterns.append(f"{p} ({p_wr:.0f}% win rate, n={len(res)})")
 
     lines = [
-        f"- Overall Empirical Win Rate: {overall_wr}% across {total} demo trades.",
+        f"- Overall Empirical Win Rate: {overall_wr}% across {total} trades (including shadow learning).",
         f"- RSI Sweet Spot: {rsi_clause}.",
     ]
     if fib_wr is not None:
@@ -194,7 +196,10 @@ def get_readiness_metrics() -> dict[str, Any]:
       - Readiness Meter status
     """
     history = load_pattern_history()
-    closed = [t for t in history.values() if t.get("outcome") in ("WIN", "LOSS")]
+    closed = [
+        t for t in history.values()
+        if t.get("outcome") in ("WIN", "LOSS") and not t.get("is_shadow_candidate")
+    ]
     recent = closed[-30:] if len(closed) > 30 else closed
 
     total = len(recent)

@@ -38,7 +38,7 @@ WATCHLIST: list[str] = PAIRS  # Alias for backward compatibility
 
 # ── Timezone & Session Windows ─────────────────────────────────────────────────
 TIMEZONE: str = "Africa/Addis_Ababa"          # EAT — UTC+3
-LONDON_SESSION_START: str = "10:30"            # 07:30 UTC = 10:30 EAT
+LONDON_SESSION_START: str = "09:30"            # 06:30 UTC = 09:30 EAT
 LONDON_SESSION_END: str   = "19:30"            # 16:30 UTC = 19:30 EAT
 SCAN_INTERVAL_MINUTES: int = 15                # Scan every 15 minutes during session
 PAIR_REQUEST_DELAY_SECONDS: int = 10           # 10s delay between pairs (stays under 8 req/min)
