@@ -54,5 +54,24 @@
     "outcome": "PENDING",
     "pnl_usd": 0.0,
     "is_shadow_candidate": false
+  },
+  "5e0daaa8-847a-4544-b50b-34a1b5003579": {
+    "signal_id": "5e0daaa8-847a-4544-b50b-34a1b5003579",
+    "timestamp_eat": "2026-11-25 17:15:39",
+    "pair": "EUR/USD",
+    "direction": "ENTER_SHORT",
+    "rsi_14_15m": 49.3,
+    "ema_signal": "BEARISH",
+    "ema_gap_pips": 21.8,
+    "atr_15m": 0.00072,
+    "in_fib_golden_zone": true,
+    "candle_pattern": "NEUTRAL",
+    "body_pct": 0.363,
+    "news_bias": "NEUTRAL",
+    "confluence_score": 65,
+    "session_tag": "LONDON_NY_OVERLAP",
+    "outcome": "PENDING",
+    "pnl_usd": 0.0,
+    "is_shadow_candidate": false
   }
 }
