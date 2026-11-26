@@ -1916,5 +1916,43 @@
     "outcome": "SHADOW_PENDING",
     "pnl_usd": 0.0,
     "is_shadow_candidate": true
+  },
+  "8b1be913-9d85-4ae9-b241-8ff29112de26": {
+    "signal_id": "8b1be913-9d85-4ae9-b241-8ff29112de26",
+    "timestamp_eat": "2026-11-26 17:15:49",
+    "pair": "USD/JPY",
+    "direction": "SHADOW_LONG",
+    "rsi_14_15m": 43.1,
+    "ema_signal": "BULLISH",
+    "ema_gap_pips": 3.6,
+    "atr_15m": 0.04551,
+    "in_fib_golden_zone": false,
+    "candle_pattern": "STRONG_BEARISH_MARUBOZU",
+    "body_pct": 0.891,
+    "news_bias": "NEUTRAL",
+    "confluence_score": 50,
+    "session_tag": "LONDON_NY_OVERLAP",
+    "outcome": "SHADOW_PENDING",
+    "pnl_usd": 0.0,
+    "is_shadow_candidate": true
+  },
+  "672fdfb0-324b-4427-b495-6d519603eaea": {
+    "signal_id": "672fdfb0-324b-4427-b495-6d519603eaea",
+    "timestamp_eat": "2026-11-26 17:16:09",
+    "pair": "EUR/JPY",
+    "direction": "ENTER_LONG",
+    "rsi_14_15m": 64.3,
+    "ema_signal": "BEARISH",
+    "ema_gap_pips": 4.8,
+    "atr_15m": 0.08068,
+    "in_fib_golden_zone": false,
+    "candle_pattern": "STRONG_BULLISH_MARUBOZU",
+    "body_pct": 0.872,
+    "news_bias": "NEUTRAL",
+    "confluence_score": 100,
+    "session_tag": "LONDON_NY_OVERLAP",
+    "outcome": "PENDING",
+    "pnl_usd": 0.0,
+    "is_shadow_candidate": false
   }
 }
