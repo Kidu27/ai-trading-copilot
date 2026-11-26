@@ -719,5 +719,24 @@
     "outcome": "PENDING",
     "pnl_usd": 0.0,
     "is_shadow_candidate": false
+  },
+  "5c6eabf4-3363-451a-8c66-1b5566f8142f": {
+    "signal_id": "5c6eabf4-3363-451a-8c66-1b5566f8142f",
+    "timestamp_eat": "2026-11-26 10:46:13",
+    "pair": "EUR/JPY",
+    "direction": "ENTER_LONG",
+    "rsi_14_15m": 64.1,
+    "ema_signal": "BEARISH",
+    "ema_gap_pips": 12.7,
+    "atr_15m": 0.07728,
+    "in_fib_golden_zone": false,
+    "candle_pattern": "NEUTRAL",
+    "body_pct": 0.554,
+    "news_bias": "NEUTRAL",
+    "confluence_score": 78,
+    "session_tag": "LONDON_OPEN",
+    "outcome": "PENDING",
+    "pnl_usd": 0.0,
+    "is_shadow_candidate": false
   }
 }
