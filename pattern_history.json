@@ -507,8 +507,8 @@
     "news_bias": "NEUTRAL",
     "confluence_score": 60,
     "session_tag": "OFF_HOURS",
-    "outcome": "SHADOW_PENDING",
-    "pnl_usd": 0.0,
+    "outcome": "SHADOW_WIN",
+    "pnl_usd": 17.1,
     "is_shadow_candidate": true
   },
   "efbe1889-f009-477f-9166-90ad81fbfa84": {
@@ -583,8 +583,8 @@
     "news_bias": "NEUTRAL",
     "confluence_score": 60,
     "session_tag": "OFF_HOURS",
-    "outcome": "SHADOW_PENDING",
-    "pnl_usd": 0.0,
+    "outcome": "SHADOW_WIN",
+    "pnl_usd": 15.8,
     "is_shadow_candidate": true
   },
   "48744dbb-5996-4dd4-966f-64731681f4e2": {
