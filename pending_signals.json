@@ -27,7 +27,7 @@
     "confluence_score": 65,
     "risk_reward": 1.87,
     "risk_usd": 10.0,
-    "status": "MANUAL"
+    "status": "CLOSED_WIN"
   },
   "ed3e9b32-55c5-4f1c-9c05-057a2a8c9d85": {
     "signal_id": "ed3e9b32-55c5-4f1c-9c05-057a2a8c9d85",
@@ -43,7 +43,7 @@
     "confluence_score": 65,
     "risk_reward": 2.2,
     "risk_usd": 10.0,
-    "status": "SKIPPED"
+    "status": "CLOSED_LOSS"
   },
   "5e0daaa8-847a-4544-b50b-34a1b5003579": {
     "signal_id": "5e0daaa8-847a-4544-b50b-34a1b5003579",
@@ -59,7 +59,7 @@
     "confluence_score": 65,
     "risk_reward": 1.52,
     "risk_usd": 10.0,
-    "status": "MANUAL"
+    "status": "CLOSED_LOSS"
   },
   "83126820-1a91-48a4-aec2-645664cca244": {
     "signal_id": "83126820-1a91-48a4-aec2-645664cca244",
