@@ -26,5 +26,12 @@
     "outcome": "SHADOW_LOSS",
     "actionable_lesson": "For GBP/NZD, require a confirmed 15m closed rejection candle before entering near S/R when market volatility (ATR) is expanding.",
     "root_cause": "Price breached Stop-Loss at 2.3919 because counter-trend volatility overwhelmed the key S/R zone on GBP/NZD."
+  },
+  {
+    "timestamp_eat": "2026-11-26 12:00:00",
+    "pair": "GBP/AUD",
+    "outcome": "LOSS",
+    "actionable_lesson": "Require a confirming 15\u2011minute close above the high of the previous candle and a minimum 10\u2011pip upward move before entering long to avoid setups that lack immediate bullish momentum.",
+    "root_cause": "The price reversed sharply after the 08:30\u202f15\u2011minute candle closed below the entry, pulling the market into the stop\u2011loss zone within two candles."
   }
 ]
