@@ -662,5 +662,43 @@
     "outcome": "SHADOW_WIN",
     "pnl_usd": 21.0,
     "is_shadow_candidate": true
+  },
+  "f684106f-28f3-4e54-bc81-4b68a6bdcdca": {
+    "signal_id": "f684106f-28f3-4e54-bc81-4b68a6bdcdca",
+    "timestamp_eat": "2026-11-26 10:15:34",
+    "pair": "GBP/USD",
+    "direction": "SHADOW_LONG",
+    "rsi_14_15m": 45.3,
+    "ema_signal": "BEARISH",
+    "ema_gap_pips": 15.0,
+    "atr_15m": 0.00046,
+    "in_fib_golden_zone": false,
+    "candle_pattern": "NEUTRAL",
+    "body_pct": 0.551,
+    "news_bias": "NEUTRAL",
+    "confluence_score": 62,
+    "session_tag": "LONDON_OPEN",
+    "outcome": "SHADOW_WIN",
+    "pnl_usd": 14.5,
+    "is_shadow_candidate": true
+  },
+  "423030af-2370-45ca-b115-bba4ffec5a88": {
+    "signal_id": "423030af-2370-45ca-b115-bba4ffec5a88",
+    "timestamp_eat": "2026-11-26 10:17:13",
+    "pair": "GBP/NZD",
+    "direction": "ENTER_SHORT",
+    "rsi_14_15m": 54.4,
+    "ema_signal": "BEARISH",
+    "ema_gap_pips": 2.5,
+    "atr_15m": 0.00117,
+    "in_fib_golden_zone": false,
+    "candle_pattern": "BEARISH_HAMMER_ON_RESISTANCE",
+    "body_pct": 0.182,
+    "news_bias": "NEUTRAL",
+    "confluence_score": 75,
+    "session_tag": "LONDON_OPEN",
+    "outcome": "SHADOW_LOSS",
+    "pnl_usd": -9.78,
+    "is_shadow_candidate": false
   }
 }
