@@ -19,5 +19,12 @@
     "outcome": "LOSS",
     "actionable_lesson": "Always verify that the 15m closed candle aggressively rejects the S/R zone before entry, and strictly enforce the volatility filter during major liquidity overlap sessions to avoid momentum breakouts.",
     "root_cause": "Price broke above the entry zone during high volatility around 17:00, hitting the stop-loss due to persistent bullish momentum bypassing our short bias."
+  },
+  {
+    "timestamp_eat": "2026-11-26 12:00:00",
+    "pair": "GBP/NZD",
+    "outcome": "SHADOW_LOSS",
+    "actionable_lesson": "For GBP/NZD, require a confirmed 15m closed rejection candle before entering near S/R when market volatility (ATR) is expanding.",
+    "root_cause": "Price breached Stop-Loss at 2.3919 because counter-trend volatility overwhelmed the key S/R zone on GBP/NZD."
   }
 ]
