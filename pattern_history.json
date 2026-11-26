@@ -1878,5 +1878,24 @@
     "outcome": "PENDING",
     "pnl_usd": 0.0,
     "is_shadow_candidate": false
+  },
+  "61f4a3cc-c1f9-4d16-8759-0e8cbc7fd22a": {
+    "signal_id": "61f4a3cc-c1f9-4d16-8759-0e8cbc7fd22a",
+    "timestamp_eat": "2026-11-26 16:47:50",
+    "pair": "GBP/NZD",
+    "direction": "ENTER_SHORT",
+    "rsi_14_15m": 56.8,
+    "ema_signal": "BEARISH",
+    "ema_gap_pips": 3.3,
+    "atr_15m": 0.00107,
+    "in_fib_golden_zone": false,
+    "candle_pattern": "STRONG_BULLISH_MARUBOZU",
+    "body_pct": 0.758,
+    "news_bias": "NEUTRAL",
+    "confluence_score": 70,
+    "session_tag": "LONDON_NY_OVERLAP",
+    "outcome": "PENDING",
+    "pnl_usd": 0.0,
+    "is_shadow_candidate": false
   }
 }
