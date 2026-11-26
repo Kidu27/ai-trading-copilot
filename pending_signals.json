@@ -380,5 +380,21 @@
     "risk_reward": 2.2,
     "risk_usd": 9.7,
     "status": "WAITING_MANUAL"
+  },
+  "5c6eabf4-3363-451a-8c66-1b5566f8142f": {
+    "signal_id": "5c6eabf4-3363-451a-8c66-1b5566f8142f",
+    "timestamp_eat": "2026-11-26 10:46:13",
+    "timestamp_iso": "2026-11-26T10:46:13.590668+03:00",
+    "pair": "EUR/JPY",
+    "direction": "ENTER_LONG",
+    "entry": 174.71755,
+    "stop_loss": 174.46275,
+    "take_profit": 175.1726,
+    "standard_lots": 0.06,
+    "units": 6000,
+    "confluence_score": 78,
+    "risk_reward": 1.79,
+    "risk_usd": 9.6,
+    "status": "PENDING"
   }
 }
