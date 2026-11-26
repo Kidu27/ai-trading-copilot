@@ -1,19 +1,5 @@
 [
   {
-    "timestamp_eat": "2026-11-26 08:45:00",
-    "pair": "GBP/NZD",
-    "outcome": "LOSS",
-    "actionable_lesson": "Always require a confirmed 15m bullish engulfing candle or strong rejection wick at the Fibonacci Golden Zone before executing long entries.",
-    "root_cause": "The trade resulted in a loss because the downward momentum continued and breached the stop-loss level at 2.39241 before any upward continuation could materialize."
-  },
-  {
-    "timestamp_eat": "2026-11-26 08:30:00",
-    "pair": "EUR/USD",
-    "outcome": "LOSS",
-    "actionable_lesson": "Always verify that the 15m closed candle aggressively rejects the S/R zone before entry, and strictly enforce the volatility filter during major liquidity overlap sessions to avoid momentum breakouts.",
-    "root_cause": "Price broke above the entry zone during high volatility around 17:00, hitting the stop-loss due to persistent bullish momentum bypassing our short bias."
-  },
-  {
     "timestamp_eat": "2026-11-26 12:00:00",
     "pair": "GBP/NZD",
     "outcome": "SHADOW_LOSS",
@@ -68,5 +54,19 @@
     "outcome": "SHADOW_LOSS",
     "actionable_lesson": "Incorporate a volatility\u2011adjusted stop\u2011loss buffer or require a confirming higher\u2011time low before entering to avoid being stopped out by intra\u2011candle spikes.",
     "root_cause": "A sudden down\u2011tick on the 11:15\u202f15\u2011minute candle pushed price below the stop\u2011loss, indicating a volatility spike that overcame the expected support level."
+  },
+  {
+    "timestamp_eat": "2026-11-26 16:15:00",
+    "pair": "GBP/AUD",
+    "outcome": "SHADOW_LOSS",
+    "actionable_lesson": "Only enter a long position when the 15\u2011minute candle closes above the 1.97444 support level and the 1\u2011hour trend confirms a higher high, ensuring the support zone is intact before risking the stop.",
+    "root_cause": "The price retraced sharply after the 12:00\u201112:15 candle, breaking the 1.97444 support level and triggering the stop\u2011loss."
+  },
+  {
+    "timestamp_eat": "2026-11-26 16:15:00",
+    "pair": "GBP/AUD",
+    "outcome": "SHADOW_LOSS",
+    "actionable_lesson": "Only enter a long position when the 15m candle closes above the entry price and the close is at least 0.0005 above the stop\u2011loss level to avoid immediate stop\u2011loss hits.",
+    "root_cause": "The price retraced below the 1.97445 stop\u2011loss level after the 13:00\u201113:15 candle, indicating a failure of the 1H trend to sustain a higher high and a breach of the 15m support zone."
   }
 ]
