@@ -342,7 +342,7 @@ def _send_open_trades_to_telegram() -> None:
     for sid, trade in open_trades.items():
         pair = trade.get("pair", "UNKNOWN")
         direction = trade.get("direction", "?")
-        entry = trade.get("entry") or trade.get("fill_price", "?")
+        entry = trade.get("entry_price") or trade.get("entry") or trade.get("fill_price", "?")
         sl = trade.get("stop_loss", "?")
         tp = trade.get("take_profit", "?")
         lots = trade.get("standard_lots", 0.01)

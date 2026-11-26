@@ -159,19 +159,38 @@ def _handle_decline(
     callback_query_id: str,
     cq: dict[str, Any],
 ) -> None:
-    """User tapped ❌ Decline — mark signal declined, update Telegram message while keeping numbers."""
-    _answer_callback(callback_query_id, text="Signal declined.")
+    """User tapped ❌ Decline — shadow-track signal for AI learning and update Telegram message."""
+    _answer_callback(callback_query_id, text="Signal declined — shadow tracked for AI learning.")
     notifier.update_signal_status(signal_id, "DECLINED")
     base_card = _get_base_card(cq, signal)
+
+    try:
+        journal.mark_shadow_trade(
+            signal_id=signal_id,
+            signal=signal,
+            notes="User declined/skipped — shadow tracked for AI learning",
+        )
+    except Exception as exc:
+        print(f"  [listener] Warning: failed to mark shadow trade in journal: {exc}")
+
+    try:
+        import pattern_stats
+        hist = pattern_stats.load_pattern_history()
+        if signal_id in hist:
+            hist[signal_id]["outcome"] = "SHADOW_OPEN"
+            hist[signal_id]["is_shadow_candidate"] = True
+            pattern_stats.save_pattern_history(hist)
+    except Exception as exc:
+        print(f"  [listener] Warning: failed to update pattern_history for shadow trade: {exc}")
 
     edit_text = (
         f"{base_card}\n\n"
         "❌ Setup Declined by User\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "Declined. No order was placed."
+        "Declined. 15m candles are being shadow-tracked for AI learning."
     )
     _edit_message(chat_id, message_id, edit_text, reply_markup={"inline_keyboard": []})
-    print(f"  [listener] Signal {signal_id[:8]}… DECLINED by user.")
+    print(f"  [listener] Signal {signal_id[:8]}… DECLINED by user — marked SHADOW_OPEN.")
 
 
 def _handle_accept(
@@ -214,19 +233,28 @@ def _handle_accept(
 
     # ── Expiry check ──────────────────────────────────────────────────────────
     if age_minutes > config.SIGNAL_EXPIRY_MINUTES:
-        _answer_callback(callback_query_id, text="⚠️ Signal expired!", alert=True)
+        _answer_callback(callback_query_id, text="⚠️ Signal expired! Auto-tracked as shadow setup.", alert=True)
         notifier.update_signal_status(signal_id, "EXPIRED")
+        try:
+            journal.mark_shadow_trade(
+                signal_id=signal_id,
+                signal=signal,
+                notes="User declined/skipped — shadow tracked for AI learning",
+            )
+        except Exception as exc:
+            print(f"  [listener] Warning: failed to mark shadow trade in journal on expiry: {exc}")
+
         edit_text = (
             f"{base_card}\n\n"
             f"⚠️ Signal Expired (>{config.SIGNAL_EXPIRY_MINUTES} mins old) — Order Cancelled\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"⏱  Age     : {age_minutes:.1f} min  (limit: {config.SIGNAL_EXPIRY_MINUTES} min)\n"
-            "Order cancelled — price may have moved significantly."
+            "Order cancelled. 15m candles are being shadow-tracked for AI learning."
         )
         _edit_message(chat_id, message_id, edit_text, reply_markup={"inline_keyboard": []})
         print(
             f"  [listener] Signal {signal_id[:8]}… EXPIRED "
-            f"({age_minutes:.1f} min > {config.SIGNAL_EXPIRY_MINUTES} min limit)."
+            f"({age_minutes:.1f} min > {config.SIGNAL_EXPIRY_MINUTES} min limit) — marked SHADOW_OPEN."
         )
         return
 
@@ -295,7 +323,7 @@ def _handle_accept(
     manual_markup = {
         "inline_keyboard": [
             [
-                {"text": "✅ Entered Manually", "callback_data": f"manual:{signal_id}"},
+                {"text": "📱 I Entered on MT5 Mobile", "callback_data": f"manual:{signal_id}"},
                 {"text": "⏭️ Skipped", "callback_data": f"skip:{signal_id}"},
             ]
         ]
@@ -312,50 +340,93 @@ def _handle_manual(
     callback_query_id: str,
     cq: dict[str, Any],
 ) -> None:
-    """User tapped [✅ Entered Manually]."""
-    _answer_callback(callback_query_id, text="✅ Trade recorded as manually entered!")
-    notifier.update_signal_status(signal_id, "MANUAL")
+    """User tapped [📱 I Entered on MT5 Mobile]."""
+    _answer_callback(callback_query_id, text="✅ Trade recorded! Auto-tracking SL & TP via 15m candles.")
+    notifier.update_signal_status(signal_id, "EXECUTED")
     base_card = _get_base_card(cq, signal)
 
     eat_tz  = pytz.timezone(config.TIMEZONE)
     now_eat = datetime.now(tz=eat_tz)
+    now_eat_str = now_eat.strftime("%Y-%m-%d %H:%M:%S")
+
+    entry = float(signal.get("entry") or signal.get("fill_price") or 0.0)
+    sl = float(signal.get("stop_loss") or 0.0)
+    tp = float(signal.get("take_profit") or 0.0)
+    risk_usd = float(signal.get("risk_usd") or round(config.ACCOUNT_BALANCE * config.MAX_RISK_PERCENT, 2))
+    risk_reward = float(signal.get("risk_reward") or 2.0)
+    pair = signal.get("pair", "")
+
+    # Infer true direction from entry/SL if needed
+    raw_dir = str(signal.get("direction", "")).strip().upper()
+    if "LONG" in raw_dir and "SHORT" not in raw_dir:
+        true_dir = "ENTER_LONG"
+    elif "SHORT" in raw_dir:
+        true_dir = "ENTER_SHORT"
+    elif entry > 0 and sl > 0:
+        true_dir = "ENTER_LONG" if sl < entry else "ENTER_SHORT"
+    else:
+        true_dir = "ENTER_LONG"
+
+    signal["direction"] = true_dir
+    signal["entry"] = entry
+    signal["stop_loss"] = sl
+    signal["take_profit"] = tp
 
     # Log EXECUTED row to trades_log.csv
     try:
         journal.log_executed_trade(
             signal,
-            fill_price=float(signal.get("entry") or 0.0),
-            notes="Manually entered on MT5 Mobile",
+            fill_price=entry,
+            notes="Manually entered on MT5 Mobile — auto-tracking SL/TP",
         )
     except Exception as exc:
         print(f"  [listener] Warning: failed to log manual trade to journal: {exc}")
 
-    # Record in active_trades.json
+    # Register the trade into active_trades.json
     trade_record = {
         "signal_id":     signal_id,
-        "pair":          signal.get("pair", ""),
-        "direction":     signal.get("direction", ""),
-        "entry":         signal.get("entry"),
-        "fill_price":    signal.get("entry"),
-        "stop_loss":     signal.get("stop_loss"),
-        "take_profit":   signal.get("take_profit"),
+        "pair":          pair,
+        "direction":     true_dir,
+        "entry_price":   entry,
+        "entry":         entry,
+        "fill_price":    entry,
+        "stop_loss":     sl,
+        "take_profit":   tp,
+        "risk_usd":      risk_usd,
+        "risk_reward":   risk_reward,
         "standard_lots": signal.get("standard_lots", 0.01),
         "units":         signal.get("units", 1000),
         "mt5_ticket":    "MANUAL_ENTRY",
+        "source":        "MANUAL_MT5",
         "status":        "OPEN",
         "executor":      "manual",
         "demo_mode":     config.DEMO_MODE,
-        "opened_eat":    now_eat.strftime("%Y-%m-%d %H:%M:%S"),
+        "timestamp_eat": signal.get("timestamp_eat") or now_eat_str,
+        "opened_eat":    now_eat_str,
         "closed_eat":    None,
         "pnl_usd":       None,
     }
     broker_executor._append_active_trade(trade_record)
 
+    # Immediately sync active_trades.json and trades_log.csv to GitHub's memory branch
+    try:
+        import github_sync
+        github_sync.push_memory_files(f"Manual MT5 trade registered: {pair} ({true_dir})")
+    except Exception as exc:
+        print(f"  [listener] Warning: failed to push manual trade to GitHub: {exc}")
+
     confirm_note = (
         f"{base_card}\n\n"
-        f"✅ MANUALLY ENTERED ON MT5 MOBILE\n"
+        f"📱 MANUALLY ENTERED ON MT5 MOBILE\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"Position is active. When it closes, tap below to report outcome:"
+        f"Side       : {true_dir}\n"
+        f"Entry      : {entry}\n"
+        f"Stop Loss  : {sl}\n"
+        f"Take Profit: {tp}\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"Position is LIVE. Auto-tracking SL & TP via 15m candles.\n"
+        f"You will be alerted instantly when position hits SL or TP.\n"
+        f"Or report early manual close below:"
     )
     report_markup = {
         "inline_keyboard": [
@@ -366,7 +437,7 @@ def _handle_manual(
         ]
     }
     _edit_message(chat_id, message_id, confirm_note, reply_markup=report_markup)
-    print(f"  [listener] Signal {signal_id[:8]}… confirmed as MANUAL trade.")
+    print(f"  [listener] Signal {signal_id[:8]}… confirmed as MANUAL MT5 trade ({true_dir}).")
 
 
 def _handle_skip(
@@ -377,28 +448,38 @@ def _handle_skip(
     callback_query_id: str,
     cq: dict[str, Any],
 ) -> None:
-    """User tapped [⏭️ Skipped]."""
-    _answer_callback(callback_query_id, text="Trade skipped.")
+    """User tapped [⏭️ Skipped] — shadow-track signal for AI learning."""
+    _answer_callback(callback_query_id, text="Trade skipped — shadow tracked for AI learning.")
     notifier.update_signal_status(signal_id, "SKIPPED")
     base_card = _get_base_card(cq, signal)
 
-    eat_tz = pytz.timezone(config.TIMEZONE)
-    now_eat_str = datetime.now(tz=eat_tz).strftime("%Y-%m-%d %H:%M:%S")
     try:
-        journal.update_trade_outcome(
+        journal.mark_shadow_trade(
             signal_id=signal_id,
-            exit_price=0.0,
-            exit_time=now_eat_str,
-            pnl_usd=0.0,
-            outcome="SKIPPED",
-            notes="Manual entry skipped by user",
+            signal=signal,
+            notes="User declined/skipped — shadow tracked for AI learning",
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"  [listener] Warning: failed to mark shadow trade in journal on skip: {exc}")
 
-    skip_note = f"{base_card}\n\n⏭️ Manual entry skipped by user."
+    try:
+        import pattern_stats
+        hist = pattern_stats.load_pattern_history()
+        if signal_id in hist:
+            hist[signal_id]["outcome"] = "SHADOW_OPEN"
+            hist[signal_id]["is_shadow_candidate"] = True
+            pattern_stats.save_pattern_history(hist)
+    except Exception as exc:
+        print(f"  [listener] Warning: failed to update pattern_history for shadow trade: {exc}")
+
+    skip_note = (
+        f"{base_card}\n\n"
+        "⏭️ Manual Entry Skipped by User\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "Skipped. 15m candles are being shadow-tracked for AI learning."
+    )
     _edit_message(chat_id, message_id, skip_note, reply_markup={"inline_keyboard": []})
-    print(f"  [listener] Signal {signal_id[:8]}… marked SKIPPED.")
+    print(f"  [listener] Signal {signal_id[:8]}… marked SKIPPED — marked SHADOW_OPEN.")
 
 
 def _handle_report_outcome(
@@ -590,24 +671,10 @@ def _process_callback_query(cq: dict[str, Any]) -> None:
 
         if action == "decline":
             _handle_decline(signal_id, signal, chat_id, message_id, callback_query_id, cq)
-            # Update outcome in journal as well
-            eat_tz  = pytz.timezone(config.TIMEZONE)
-            now_eat = datetime.now(tz=eat_tz).strftime("%Y-%m-%d %H:%M:%S")
-            try:
-                journal.update_trade_outcome(
-                    signal_id=signal_id,
-                    exit_price=0.0,
-                    exit_time=now_eat,
-                    pnl_usd=0.0,
-                    outcome="DECLINED",
-                    notes="Declined by user via Telegram",
-                )
-            except Exception:
-                pass
         elif action == "accept":
             _handle_accept(signal_id, signal, chat_id, message_id, callback_query_id, cq)
 
-    elif action in ("manual", "skip"):
+    elif action in ("manual", "manual_mt5", "mt5_manual", "skip"):
         if current_status not in ("PENDING", "WAITING_MANUAL"):
             _answer_callback(
                 callback_query_id,
@@ -615,7 +682,7 @@ def _process_callback_query(cq: dict[str, Any]) -> None:
                 alert=True,
             )
             return
-        if action == "manual":
+        if action in ("manual", "manual_mt5", "mt5_manual"):
             _handle_manual(signal_id, signal, chat_id, message_id, callback_query_id, cq)
         elif action == "skip":
             _handle_skip(signal_id, signal, chat_id, message_id, callback_query_id, cq)

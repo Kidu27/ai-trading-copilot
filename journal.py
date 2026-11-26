@@ -95,14 +95,14 @@ def log_setup(
 def log_executed_trade(
     signal: dict[str, Any],
     fill_price: float | None = None,
-    notes: str = "Order executed",
+    notes: str = "Manually entered on MT5 Mobile — auto-tracking SL/TP",
 ) -> None:
     """
     Log or update an accepted/executed trade in trades_log.csv in-place.
 
-    Called by telegram_listener when user taps [✅ Accept & Enter] or [✅ Entered Manually].
-    Updates existing row matching signal_id (outcome="EXECUTED", entry_price=fill_price, notes)
-    to eliminate duplicate rows.
+    Called by telegram_listener when user taps [✅ Accept & Enter] or [📱 I Entered on MT5 Mobile].
+    Updates existing row matching signal_id (decision, outcome="EXECUTED", entry_price, notes)
+    to eliminate duplicate rows and ensure proper direction & level tracking.
     """
     _ensure_headers()
 
@@ -110,16 +110,49 @@ def log_executed_trade(
     rows: list[dict[str, Any]] = []
     updated = False
 
+    entry_val = fill_price if fill_price is not None else signal.get("entry")
+    sl_val = signal.get("stop_loss")
+    tp_val = signal.get("take_profit")
+
+    try:
+        e = float(entry_val or 0.0)
+        s = float(sl_val or 0.0)
+    except (ValueError, TypeError):
+        e, s = 0.0, 0.0
+
+    raw_dir = str(signal.get("direction", "")).strip().upper()
+    if "LONG" in raw_dir and "SHORT" not in raw_dir:
+        true_dir = "ENTER_LONG"
+    elif "SHORT" in raw_dir:
+        true_dir = "ENTER_SHORT"
+    elif e > 0 and s > 0:
+        true_dir = "ENTER_LONG" if s < e else "ENTER_SHORT"
+    else:
+        true_dir = "ENTER_LONG"
+
     if os.path.exists(LOG_FILE):
         with open(LOG_FILE, newline="", encoding="utf-8") as fh:
             reader = csv.DictReader(fh)
             for row in reader:
                 if target_id and row.get("signal_id") == target_id:
                     row["outcome"] = "EXECUTED"
-                    if fill_price is not None:
-                        row["entry_price"] = str(fill_price)
-                    existing_notes = (row.get("notes") or "").strip()
-                    row["notes"] = f"{existing_notes} | {notes}" if existing_notes else notes
+                    row["decision"] = true_dir
+                    if entry_val is not None:
+                        row["entry_price"] = str(entry_val)
+                    if sl_val is not None and str(sl_val).strip():
+                        row["stop_loss"] = str(sl_val)
+                    if tp_val is not None and str(tp_val).strip():
+                        row["take_profit"] = str(tp_val)
+                    if signal.get("standard_lots"):
+                        row["standard_lots"] = str(signal.get("standard_lots"))
+                    if signal.get("risk_reward"):
+                        row["risk_reward"] = str(signal.get("risk_reward"))
+                    if signal.get("risk_usd"):
+                        row["risk_usd"] = str(signal.get("risk_usd"))
+                    row["exit_price"] = ""
+                    row["exit_time"] = ""
+                    row["pnl_usd"] = ""
+                    row["notes"] = notes
                     updated = True
                 rows.append(row)
 
@@ -128,7 +161,7 @@ def log_executed_trade(
             writer = csv.DictWriter(fh, fieldnames=_CSV_HEADERS, extrasaction="ignore")
             writer.writeheader()
             writer.writerows(rows)
-        print(f"  [journal] Updated in-place EXECUTED trade for {signal.get('pair', '')} (ID: {target_id[:8]}…)")
+        print(f"  [journal] Updated in-place EXECUTED trade for {signal.get('pair', '')} ({true_dir}) (ID: {target_id[:8]}…)")
     else:
         # Fallback: append if signal_id row not previously logged
         eat_tz = pytz.timezone(config.TIMEZONE)
@@ -137,11 +170,11 @@ def log_executed_trade(
             "timestamp_eat":   signal.get("timestamp_eat") or now_eat,
             "signal_id":       target_id,
             "pair":            signal.get("pair", ""),
-            "decision":        signal.get("direction", "EXECUTED"),
+            "decision":        true_dir,
             "confluence_score": signal.get("confluence_score", 0),
-            "entry_price":     fill_price or signal.get("entry", ""),
-            "stop_loss":       signal.get("stop_loss", ""),
-            "take_profit":     signal.get("take_profit", ""),
+            "entry_price":     entry_val or "",
+            "stop_loss":       sl_val or "",
+            "take_profit":     tp_val or "",
             "standard_lots":   signal.get("standard_lots", ""),
             "risk_reward":     signal.get("risk_reward", ""),
             "risk_usd":        signal.get("risk_usd", ""),
@@ -154,7 +187,116 @@ def log_executed_trade(
         with open(LOG_FILE, "a", newline="", encoding="utf-8") as fh:
             writer = csv.DictWriter(fh, fieldnames=_CSV_HEADERS, extrasaction="ignore")
             writer.writerow(new_row)
-        print(f"  [journal] Appended new EXECUTED trade for {new_row['pair']} (ID: {target_id[:8]}…)")
+        print(f"  [journal] Appended new EXECUTED trade for {new_row['pair']} ({true_dir}) (ID: {target_id[:8]}…)")
+
+
+def mark_shadow_trade(
+    signal_id: str,
+    signal: dict[str, Any] | None = None,
+    notes: str = "User declined/skipped — shadow tracked for AI learning",
+) -> bool:
+    """
+    Mark a declined, skipped, or expired setup as SHADOW_OPEN in trades_log.csv.
+    Infers direction ('SHADOW_LONG' if stop_loss < entry_price else 'SHADOW_SHORT').
+    """
+    _ensure_headers()
+    if not os.path.exists(LOG_FILE):
+        return False
+
+    rows: list[dict[str, Any]] = []
+    updated = False
+    sig = signal or {}
+
+    with open(LOG_FILE, newline="", encoding="utf-8") as fh:
+        reader = csv.DictReader(fh)
+        for row in reader:
+            row_id = (row.get("signal_id") or "").strip()
+            if signal_id and row_id == signal_id:
+                try:
+                    entry = float(row.get("entry_price") or sig.get("entry") or 0.0)
+                    sl = float(row.get("stop_loss") or sig.get("stop_loss") or 0.0)
+                    tp = float(row.get("take_profit") or sig.get("take_profit") or 0.0)
+                except (ValueError, TypeError):
+                    entry, sl, tp = 0.0, 0.0, 0.0
+
+                raw_dir = (row.get("decision") or sig.get("direction") or "").strip().upper()
+                if "LONG" in raw_dir and "SHORT" not in raw_dir:
+                    shadow_dir = "SHADOW_LONG"
+                elif "SHORT" in raw_dir:
+                    shadow_dir = "SHADOW_SHORT"
+                elif entry > 0 and sl > 0:
+                    shadow_dir = "SHADOW_LONG" if sl < entry else "SHADOW_SHORT"
+                else:
+                    shadow_dir = "SHADOW_LONG"
+
+                row["decision"] = shadow_dir
+                row["outcome"] = "SHADOW_OPEN"
+                if entry > 0 and not row.get("entry_price"):
+                    row["entry_price"] = str(entry)
+                if sl > 0 and not row.get("stop_loss"):
+                    row["stop_loss"] = str(sl)
+                if tp > 0 and not row.get("take_profit"):
+                    row["take_profit"] = str(tp)
+                if sig.get("risk_reward") and not row.get("risk_reward"):
+                    row["risk_reward"] = str(sig.get("risk_reward"))
+                if sig.get("risk_usd") and not row.get("risk_usd"):
+                    row["risk_usd"] = str(sig.get("risk_usd"))
+                row["exit_price"] = ""
+                row["exit_time"] = ""
+                row["pnl_usd"] = ""
+                row["notes"] = notes
+                updated = True
+            rows.append(row)
+
+    if not updated and sig:
+        eat_tz = pytz.timezone(config.TIMEZONE)
+        now_eat = datetime.now(tz=eat_tz).strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            entry = float(sig.get("entry") or 0.0)
+            sl = float(sig.get("stop_loss") or 0.0)
+        except (ValueError, TypeError):
+            entry, sl = 0.0, 0.0
+
+        raw_dir = (sig.get("direction") or "").strip().upper()
+        if "LONG" in raw_dir and "SHORT" not in raw_dir:
+            shadow_dir = "SHADOW_LONG"
+        elif "SHORT" in raw_dir:
+            shadow_dir = "SHADOW_SHORT"
+        elif entry > 0 and sl > 0:
+            shadow_dir = "SHADOW_LONG" if sl < entry else "SHADOW_SHORT"
+        else:
+            shadow_dir = "SHADOW_LONG"
+
+        new_row = {
+            "timestamp_eat":   sig.get("timestamp_eat") or now_eat,
+            "signal_id":       signal_id,
+            "pair":            sig.get("pair", ""),
+            "decision":        shadow_dir,
+            "confluence_score": sig.get("confluence_score", 0),
+            "entry_price":     sig.get("entry", ""),
+            "stop_loss":       sig.get("stop_loss", ""),
+            "take_profit":     sig.get("take_profit", ""),
+            "standard_lots":   sig.get("standard_lots", ""),
+            "risk_reward":     sig.get("risk_reward", ""),
+            "risk_usd":        sig.get("risk_usd", ""),
+            "outcome":         "SHADOW_OPEN",
+            "exit_price":      "",
+            "exit_time":       "",
+            "pnl_usd":         "",
+            "notes":           notes,
+        }
+        rows.append(new_row)
+        updated = True
+
+    if updated:
+        with open(LOG_FILE, "w", newline="", encoding="utf-8") as fh:
+            writer = csv.DictWriter(fh, fieldnames=_CSV_HEADERS, extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(rows)
+        print(f"  [journal] Marked signal {signal_id[:8]}… as SHADOW_OPEN ({notes})")
+        return True
+
+    return False
 
 
 def update_trade_outcome(
