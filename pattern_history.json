@@ -1479,5 +1479,24 @@
     "outcome": "SHADOW_PENDING",
     "pnl_usd": 0.0,
     "is_shadow_candidate": true
+  },
+  "cfcdbb11-1108-49e3-a5e5-7d733455bd12": {
+    "signal_id": "cfcdbb11-1108-49e3-a5e5-7d733455bd12",
+    "timestamp_eat": "2026-11-26 15:30:12",
+    "pair": "EUR/USD",
+    "direction": "ENTER_LONG",
+    "rsi_14_15m": 52.2,
+    "ema_signal": "BEARISH",
+    "ema_gap_pips": 6.8,
+    "atr_15m": 0.0005,
+    "in_fib_golden_zone": false,
+    "candle_pattern": "STRONG_BULLISH_MARUBOZU",
+    "body_pct": 0.882,
+    "news_bias": "NEUTRAL",
+    "confluence_score": 100,
+    "session_tag": "LONDON_OPEN",
+    "outcome": "PENDING",
+    "pnl_usd": 0.0,
+    "is_shadow_candidate": false
   }
 }
