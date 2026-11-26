@@ -121,10 +121,7 @@ def get_win_signature_summary() -> str:
     closed = [t for t in history.values() if t.get("outcome") in ("WIN", "LOSS", "SHADOW_WIN", "SHADOW_LOSS")]
 
     if len(closed) < 5:
-        return (
-            "- Baseline Winning DNA (preliminary): Prioritize entries where 15m RSI is in the 42–58 sweet spot, "
-            "price is touching the Fibonacci Golden Zone (50%–61.8%), and 1H EMA 50/200 aligns with direction."
-        )
+        return "No empirical Winning DNA yet (fewer than 5 closed trades). Rely strictly on current price structure and math rules."
 
     # 1. Total Win Rate
     total = len(closed)
@@ -240,7 +237,7 @@ def get_readiness_metrics() -> dict[str, Any]:
         if p != "NEUTRAL":
             pat_wins[p] = pat_wins.get(p, 0) + 1
 
-    top_pat = max(pat_wins.items(), key=lambda x: x[1])[0] if pat_wins else "HAMMER / ENGULFING"
+    top_pat = max(pat_wins.items(), key=lambda x: x[1])[0] if pat_wins else "None yet"
 
     # Status meter
     if total >= 30 and win_rate >= 60.0 and (gross_loss == 0 or (gross_profit / gross_loss) >= 1.8):

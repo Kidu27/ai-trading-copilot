@@ -372,8 +372,8 @@ def _send_open_trades_to_telegram() -> None:
             "reply_markup": {
                 "inline_keyboard": [
                     [
-                        {"text": "🏆 Report WIN", "callback_data": f"win:{sid}"},
-                        {"text": "❌ Report LOSS", "callback_data": f"loss:{sid}"},
+                        {"text": "🏆 Early Close: WIN", "callback_data": f"win:{sid}"},
+                        {"text": "❌ Early Close: LOSS", "callback_data": f"loss:{sid}"},
                     ]
                 ]
             },
@@ -459,11 +459,13 @@ async def telegram_webhook(request: Request) -> dict[str, str]:
             elif cmd == "/gate2":
                 config.NOTIFY_MODE = "GATE2_ONLY"
                 config.NOTIFY_NO_TRADE = True
-                _send_telegram_text("🎯 Gate 2 Mode Enabled: Only setups passing Gate 2 math (both >=65 signals and Gemini rejections) will alert on Telegram.")
+                min_score = config.get_min_confluence_score()
+                _send_telegram_text(f"🎯 Gate 2 Mode Enabled: Only setups passing Gate 2 math (both >={min_score} signals and Gemini rejections) will alert on Telegram.")
             elif cmd == "/quiet":
                 config.NOTIFY_MODE = "TRADES_ONLY"
                 config.NOTIFY_NO_TRADE = False
-                _send_telegram_text("🤫 Quiet Mode Enabled: Only actionable setups (confluence >= 65) will alert.")
+                min_score = config.get_min_confluence_score()
+                _send_telegram_text(f"🤫 Quiet Mode Enabled: Only actionable setups (confluence >= {min_score}) will alert.")
             elif cmd == "/verbose":
                 config.NOTIFY_MODE = "ALL"
                 config.NOTIFY_NO_TRADE = True
@@ -472,6 +474,7 @@ async def telegram_webhook(request: Request) -> dict[str, str]:
                 _send_telegram_text("📦 Dispatching end-of-session backup & memory sync to GitHub...")
                 threading.Thread(target=_execute_backup_task, daemon=True).start()
             elif cmd in ("/help", "/start"):
+                min_score = config.get_min_confluence_score()
                 help_text = (
                     "🤖 AI FOREX CO-PILOT COMMANDS\n"
                     "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -480,7 +483,7 @@ async def telegram_webhook(request: Request) -> dict[str, str]:
                     "/open    - List open trades with WIN/LOSS buttons\n"
                     "/stats   - Readiness metrics & winning DNA\n"
                     "/gate2   - Alert setups passing Gate 2 math (default)\n"
-                    "/quiet   - Only actionable setups (confluence >= 65)\n"
+                    f"/quiet   - Only actionable setups (confluence >= {min_score})\n"
                     "/verbose - Alert all 7 pairs including math failures\n"
                     "/backup  - Send daily report, files & sync GitHub\n"
                     "/help    - Show this commands list\n"

@@ -40,13 +40,17 @@ except ImportError:
     data_fetcher = None
 
 
-def check_open_signal_outcomes(candles_by_pair: dict[str, pd.DataFrame] | None = None) -> list[dict[str, Any]]:
+def check_open_signal_outcomes(
+    candles_by_pair: dict[str, pd.DataFrame] | None = None,
+    sync_to_github: bool = False,
+) -> list[dict[str, Any]]:
     """
     Scan trades_log.csv and active_trades.json for signals in the last 48h that have not yet reached an exit outcome.
     Evaluates historical 15m candle highs/lows to detect TP or SL touches.
 
     Args:
         candles_by_pair: Optional dict of pair -> DataFrame (used for mock tests or custom candles).
+        sync_to_github:  Whether to push memory files to GitHub immediately (default False).
 
     Returns:
         List of resolved outcome report dicts.
@@ -82,18 +86,23 @@ def check_open_signal_outcomes(candles_by_pair: dict[str, pd.DataFrame] | None =
         if act.get("status") == "CLOSED":
             continue
         if sid not in logged_signal_ids:
+            act_entry = float(act.get("entry_price") or act.get("entry") or 0.0)
+            act_sl = float(act.get("stop_loss") or 0.0)
+            act_tp = float(act.get("take_profit") or 0.0)
+            calc_rr = round(abs(act_tp - act_entry) / abs(act_entry - act_sl), 2) if (act_sl > 0 and act_entry > 0 and act_tp > 0 and act_sl != act_entry) else (config.get_min_risk_reward() if hasattr(config, "get_min_risk_reward") else 2.0)
+            calc_risk = round(config.ACCOUNT_BALANCE * config.MAX_RISK_PERCENT, 2)
             new_row = {
                 "timestamp_eat": act.get("timestamp_eat") or act.get("opened_eat") or now_eat.strftime("%Y-%m-%d %H:%M:%S"),
                 "signal_id": sid,
                 "pair": act.get("pair", ""),
                 "decision": act.get("direction", "ENTER_LONG"),
                 "confluence_score": act.get("confluence_score", 0),
-                "entry_price": str(act.get("entry_price") or act.get("entry") or ""),
-                "stop_loss": str(act.get("stop_loss") or ""),
-                "take_profit": str(act.get("take_profit") or ""),
+                "entry_price": str(act_entry if act_entry > 0 else (act.get("entry_price") or act.get("entry") or "")),
+                "stop_loss": str(act_sl if act_sl > 0 else (act.get("stop_loss") or "")),
+                "take_profit": str(act_tp if act_tp > 0 else (act.get("take_profit") or "")),
                 "standard_lots": str(act.get("standard_lots") or 0.01),
-                "risk_reward": str(act.get("risk_reward") or 2.0),
-                "risk_usd": str(act.get("risk_usd") or 10.0),
+                "risk_reward": str(act.get("risk_reward") or calc_rr),
+                "risk_usd": str(act.get("risk_usd") or calc_risk),
                 "outcome": "EXECUTED",
                 "exit_price": "",
                 "exit_time": "",
@@ -250,12 +259,24 @@ def check_open_signal_outcomes(candles_by_pair: dict[str, pd.DataFrame] | None =
         # Fetch 15m candles
         df_15m = None
         if candles_by_pair and pair in candles_by_pair:
-            df_15m = candles_by_pair[pair]
-        elif data_fetcher and config.TWELVE_DATA_API_KEY:
+            candidate_df = candles_by_pair[pair]
+            if candidate_df is not None and not candidate_df.empty:
+                try:
+                    earliest_idx = candidate_df.index[0]
+                    e_dt = pd.to_datetime(earliest_idx)
+                    if isinstance(e_dt, pd.Timestamp):
+                        e_dt = e_dt.to_pydatetime()
+                    earliest_utc = pytz.utc.localize(e_dt) if e_dt.tzinfo is None else e_dt.astimezone(pytz.utc)
+                    if earliest_utc <= entry_time_utc:
+                        df_15m = candidate_df
+                except Exception:
+                    df_15m = None
+
+        if df_15m is None and data_fetcher and config.TWELVE_DATA_API_KEY:
             try:
                 elapsed_hours = max(age_seconds / 3600.0, 1.0)
                 req_candles = max(int(elapsed_hours * 4) + 10, 30)
-                df_15m = data_fetcher.fetch_candles(pair, "15min", min(req_candles, 200))
+                df_15m = data_fetcher.fetch_candles(pair, "15min", min(req_candles, 250))
             except Exception as exc:
                 print(f"  [outcome_tracker] Warning: Could not fetch candles for {pair}: {exc}")
                 continue
@@ -326,25 +347,27 @@ def check_open_signal_outcomes(candles_by_pair: dict[str, pd.DataFrame] | None =
             continue
 
         # Risk & PnL calculation
+        default_risk = round(config.ACCOUNT_BALANCE * config.MAX_RISK_PERCENT, 2)
         try:
             risk_usd = float(
                 row.get("risk_usd")
                 or act_trade.get("risk_usd")
-                or (matched_pending.get("risk_usd") if matched_pending else 10.0)
-                or 10.0
+                or (matched_pending.get("risk_usd") if matched_pending else default_risk)
+                or default_risk
             )
         except (ValueError, TypeError):
-            risk_usd = 10.0
+            risk_usd = default_risk
 
+        calc_rr = round(abs(tp - entry) / abs(entry - sl), 2) if (sl != entry) else (config.get_min_risk_reward() if hasattr(config, "get_min_risk_reward") else 2.0)
         try:
             rr = float(
                 row.get("risk_reward")
                 or act_trade.get("risk_reward")
-                or (matched_pending.get("risk_reward") if matched_pending else 2.0)
-                or 2.0
+                or (matched_pending.get("risk_reward") if matched_pending else calc_rr)
+                or calc_rr
             )
         except (ValueError, TypeError):
-            rr = 2.0
+            rr = calc_rr
 
         if hit_outcome == "WIN":
             pnl_usd = round(risk_usd * rr, 2)
@@ -513,8 +536,8 @@ def check_open_signal_outcomes(candles_by_pair: dict[str, pd.DataFrame] | None =
         except Exception as exc:
             print(f"  [outcome_tracker] Error writing updated trades_log.csv: {exc}")
 
-    # Immediately push to GitHub memory branch if any trades were resolved
-    if resolved_reports:
+    # Push to GitHub memory branch if any trades were resolved and sync requested
+    if resolved_reports and sync_to_github:
         try:
             github_sync.push_memory_files(f"Outcome tracker: {len(resolved_reports)} trade(s) resolved")
         except Exception as exc:

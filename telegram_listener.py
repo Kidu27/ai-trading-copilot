@@ -127,9 +127,16 @@ def _get_base_card(cq: dict[str, Any], signal: dict[str, Any]) -> str:
 
     dir_emoji = "🟢 ENTER LONG" if "LONG" in direction else ("🔴 ENTER SHORT" if "SHORT" in direction else direction)
 
+    if config.DEMO_MODE and getattr(config, "DEMO_DISCOVERY_MODE", False):
+        demo_tag = " [DEMO DISCOVERY]"
+    elif config.DEMO_MODE:
+        demo_tag = " [DEMO]"
+    else:
+        demo_tag = ""
+
     return (
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "🤖 AI FOREX CO-PILOT [DEMO DISCOVERY]\n"
+        f"🤖 AI FOREX CO-PILOT{demo_tag}\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"📌 Pair    : {pair}\n"
         f"📊 Signal  : {dir_emoji}\n"
@@ -353,7 +360,10 @@ def _handle_manual(
     sl = float(signal.get("stop_loss") or 0.0)
     tp = float(signal.get("take_profit") or 0.0)
     risk_usd = float(signal.get("risk_usd") or round(config.ACCOUNT_BALANCE * config.MAX_RISK_PERCENT, 2))
-    risk_reward = float(signal.get("risk_reward") or 2.0)
+    calc_rr = round(abs(tp - entry) / abs(entry - sl), 2) if (entry > 0 and sl > 0 and tp > 0 and sl != entry) else (config.get_min_risk_reward() if hasattr(config, "get_min_risk_reward") else 2.0)
+    risk_reward = float(signal.get("risk_reward") or calc_rr)
+    if risk_reward <= 0:
+        risk_reward = calc_rr
     pair = signal.get("pair", "")
 
     # Infer true direction from entry/SL if needed
@@ -408,13 +418,6 @@ def _handle_manual(
     }
     broker_executor._append_active_trade(trade_record)
 
-    # Immediately sync active_trades.json and trades_log.csv to GitHub's memory branch
-    try:
-        import github_sync
-        github_sync.push_memory_files(f"Manual MT5 trade registered: {pair} ({true_dir})")
-    except Exception as exc:
-        print(f"  [listener] Warning: failed to push manual trade to GitHub: {exc}")
-
     confirm_note = (
         f"{base_card}\n\n"
         f"📱 MANUALLY ENTERED ON MT5 MOBILE\n"
@@ -425,18 +428,9 @@ def _handle_manual(
         f"Take Profit: {tp}\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"Position is LIVE. Auto-tracking SL & TP via 15m candles.\n"
-        f"You will be alerted instantly when position hits SL or TP.\n"
-        f"Or report early manual close below:"
+        f"You will be alerted automatically when the trade finishes (use /open only if you close early manually)."
     )
-    report_markup = {
-        "inline_keyboard": [
-            [
-                {"text": "🏆 Report WIN", "callback_data": f"win:{signal_id}"},
-                {"text": "❌ Report LOSS", "callback_data": f"loss:{signal_id}"},
-            ]
-        ]
-    }
-    _edit_message(chat_id, message_id, confirm_note, reply_markup=report_markup)
+    _edit_message(chat_id, message_id, confirm_note, reply_markup={"inline_keyboard": []})
     print(f"  [listener] Signal {signal_id[:8]}… confirmed as MANUAL MT5 trade ({true_dir}).")
 
 
@@ -507,7 +501,10 @@ def _handle_report_outcome(
     sl = float(signal.get("stop_loss") or 0.0)
     tp = float(signal.get("take_profit") or 0.0)
     risk_usd = float(signal.get("risk_usd") or round(config.ACCOUNT_BALANCE * config.MAX_RISK_PERCENT, 2))
-    rr = float(signal.get("risk_reward") or 2.0)
+    calc_rr = round(abs(tp - entry) / abs(entry - sl), 2) if (entry > 0 and sl > 0 and tp > 0 and sl != entry) else (config.get_min_risk_reward() if hasattr(config, "get_min_risk_reward") else 2.0)
+    rr = float(signal.get("risk_reward") or calc_rr)
+    if rr <= 0:
+        rr = calc_rr
 
     if outcome == "WIN":
         exit_price = tp if tp > 0 else entry
@@ -554,6 +551,7 @@ def _handle_report_outcome(
             trades[signal_id]["closed_eat"] = now_eat_str
             trades[signal_id]["pnl_usd"] = pnl_usd
             trades[signal_id]["outcome"] = outcome
+            trades[signal_id]["post_mortem_done"] = True
             post_mortem.save_active_trades(trades)
     except Exception as exc:
         print(f"  [listener] Warning: failed to close in active_trades: {exc}")

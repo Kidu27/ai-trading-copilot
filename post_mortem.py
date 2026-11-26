@@ -62,7 +62,10 @@ LESSONS_FILE       = os.path.join(_BASE_DIR, "lessons_learned.json")
 # System prompt for post-mortem analysis
 # ─────────────────────────────────────────────────────────────────────────────
 
-_POST_MORTEM_SYSTEM_PROMPT = """
+def _get_post_mortem_system_prompt() -> str:
+    """Build the system prompt dynamically using config.get_min_risk_reward()."""
+    min_rr = config.get_min_risk_reward() if hasattr(config, "get_min_risk_reward") else 2.0
+    return f"""
 You are an elite Forex risk management auditor and trade psychologist conducting an \
 objective post-mortem on a recently closed trade.
 
@@ -70,16 +73,18 @@ Your goal is to extract ONE actionable lesson to improve our automated 5-step tr
 1. 1H Trend structure (HH/HL or LH/LL)
 2. S/R zones & Fibonacci Golden Zone alignment
 3. 15m closed candle trigger confirmation
-4. Strict math confirmation (R:R >= 2.0, position sizing)
+4. Strict math confirmation (R:R >= {min_rr:.1f}, position sizing)
 5. Volatility & news spike filter
 
 Return strictly valid JSON matching this schema:
-{
+{{
   "root_cause": "<1-2 clear sentences explaining why price reached the stop-loss or take-profit>",
   "rule_followed": "<1-2 sentences on whether price respected our S/R + Fib zone or violated it>",
   "actionable_lesson": "<Exactly ONE concrete 1-sentence rule to filter or improve future setups>"
-}
+}}
 """.strip()
+
+_POST_MORTEM_SYSTEM_PROMPT = _get_post_mortem_system_prompt()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -227,6 +232,8 @@ def analyze_trade_with_ai(
         f"Provide your 3-field post-mortem JSON now."
     )
 
+    system_prompt = _get_post_mortem_system_prompt()
+
     # ── Tier 1: Primary — GroqCloud ──────────────────────────────────────────
     groq_key = os.getenv("GROQ_API_KEY", "").strip() or getattr(config, "GROQ_API_KEY", "").strip()
     if groq_key:
@@ -246,7 +253,7 @@ def analyze_trade_with_ai(
                         "reasoning_effort": "low",
                         "response_format": {"type": "json_object"},
                         "messages": [
-                            {"role": "system", "content": _POST_MORTEM_SYSTEM_PROMPT},
+                            {"role": "system", "content": system_prompt},
                             {"role": "user", "content": user_prompt},
                         ],
                     },
@@ -295,7 +302,7 @@ def analyze_trade_with_ai(
                         "temperature": 0.1,
                         "max_tokens": 600,
                         "messages": [
-                            {"role": "system", "content": _POST_MORTEM_SYSTEM_PROMPT},
+                            {"role": "system", "content": system_prompt},
                             {"role": "user", "content": user_prompt},
                         ],
                     },
@@ -337,7 +344,7 @@ def analyze_trade_with_ai(
             )
             client = genai.Client(api_key=gemini_key, http_options=http_opts) if http_opts else genai.Client(api_key=gemini_key)
             gen_kwargs: dict[str, Any] = {
-                "system_instruction": _POST_MORTEM_SYSTEM_PROMPT,
+                "system_instruction": system_prompt,
                 "response_mime_type": "application/json",
                 "temperature": 0.2,
                 "max_output_tokens": 600,
@@ -383,6 +390,8 @@ def analyze_trade_with_ai(
 
     print("  [post_mortem] All AI providers exhausted, using rule-based diagnostic.")
 
+    min_rr = config.get_min_risk_reward() if hasattr(config, "get_min_risk_reward") else 2.0
+
     # Deterministic fallback diagnostic
     if outcome.upper() == "LOSS":
         return {
@@ -404,7 +413,7 @@ def analyze_trade_with_ai(
             ),
             "rule_followed": "The key S/R zone and Fibonacci retracement held firmly as anticipated.",
             "actionable_lesson": (
-                f"On {pair}, continue enforcing minimum 1:2 R:R targets when 1H trend and "
+                f"On {pair}, continue enforcing minimum 1:{min_rr:.1f} R:R targets when 1H trend and "
                 "15m rejection candle align with Fibonacci Golden Zone."
             ),
         }

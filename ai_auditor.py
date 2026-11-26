@@ -16,7 +16,6 @@ Design principles:
 import json
 import os
 import re
-import time
 from typing import Any
 
 import requests
@@ -39,11 +38,6 @@ try:
     _PYDANTIC_AVAILABLE = True
 except ImportError:
     _PYDANTIC_AVAILABLE = False
-
-# Module-level health tracking for adaptive sticky model router
-_MODEL_COOLDOWN_UNTIL: dict[str, float] = {}
-_LAST_WORKING_MODEL: str | None = None
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Pydantic response schema — guarantees Gemini returns valid JSON
@@ -177,11 +171,10 @@ STEP 1 — 1H TREND FILTER
   PASS: Trend is UPTREND or DOWNTREND with clear HH/HL or LH/LL structure.
   FAIL: Trend is RANGING, mixed, or unclear.
 
-STEP 2 — KEY S/R ZONE & FIBONACCI
-  PASS: Price is at or within 30 pips of a key support/resistance zone
-        with ≥2 historical touches. Bonus if zone coincides with the
-        50%–61.8% Fibonacci Golden Zone.
-  FAIL: Price is mid-range, far from meaningful zones.
+STEP 2 — KEY VALUE AREA (S/R ZONE, FIBONACCI, OR DYNAMIC EMA50)
+  PASS: Price is interacting with a valid value_area_type (SR_ZONE, FIB_GOLDEN_ZONE,
+        or DYNAMIC_EMA50) confirmed by Python math.
+  FAIL: Price is mid-range, far from meaningful value areas (value_area_type is NONE).
 
 STEP 3 — 15m CLOSED CANDLE TRIGGER
   PASS: The most recently CLOSED 15m candle shows a clear rejection signal
@@ -718,12 +711,20 @@ def _validate_response(ai_json: dict, math_result: dict[str, Any]) -> dict[str, 
                 return step_val.strip().upper() == "PASS"
             return False
 
+        def _is_step_fail(step_val: Any) -> bool:
+            if isinstance(step_val, dict):
+                return str(step_val.get("result", "")).strip().upper() == "FAIL"
+            if isinstance(step_val, str):
+                return step_val.strip().upper() == "FAIL"
+            return False
+
         step1_pass = _is_step_pass(checklist.get("step1_trend"))
         step4_pass = _is_step_pass(checklist.get("step4_math"))
+        step5_fail = _is_step_fail(checklist.get("step5_volatility"))
 
         trend_1h = str(math_result.get("trend_1h") or ai_json.get("trend_1h", "")).strip().upper()
 
-        if step1_pass and step4_pass:
+        if step1_pass and step4_pass and not step5_fail:
             if trend_1h == "UPTREND":
                 ai_json["decision"] = "ENTER_LONG"
             elif trend_1h == "DOWNTREND":
@@ -745,7 +746,7 @@ def _validate_response(ai_json: dict, math_result: dict[str, Any]) -> dict[str, 
             tp["stop_loss"] = tp.get("stop_loss") or math_result.get("stop_loss")
             tp["take_profit"] = tp.get("take_profit") or math_result.get("take_profit")
             tp["risk_reward"] = tp.get("risk_reward") or math_result.get("risk_reward_ratio")
-            tp["risk_usd"] = tp.get("risk_usd") or math_result.get("max_risk_usd")
+            tp["risk_usd"] = tp.get("risk_usd") or math_result.get("actual_risk_usd") or math_result.get("max_risk_usd")
             tp["lots"] = tp.get("lots") or math_result.get("position_size_lots")
         else:
             # Setup was rejected as NO_TRADE: confluence_score must be strictly below min_score
@@ -781,7 +782,7 @@ def _fail_safe(reason: str, math_result: dict[str, Any] | None = None) -> dict[s
             "stop_loss":   math_result.get("stop_loss"),
             "take_profit": math_result.get("take_profit"),
             "risk_reward": math_result.get("risk_reward_ratio"),
-            "risk_usd":    math_result.get("max_risk_usd"),
+            "risk_usd":    math_result.get("actual_risk_usd") or math_result.get("max_risk_usd"),
             "lots":        math_result.get("position_size_lots"),
         }
 

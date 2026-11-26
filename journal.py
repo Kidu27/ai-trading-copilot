@@ -77,7 +77,7 @@ def log_setup(
         "take_profit":     trade_plan.get("take_profit",  ""),
         "standard_lots":   standard_lots,
         "risk_reward":     trade_plan.get("risk_reward",  ""),
-        "risk_usd":        trade_plan.get("risk_usd",     math_result.get("max_risk_usd", "")),
+        "risk_usd":        trade_plan.get("risk_usd") or math_result.get("actual_risk_usd") or math_result.get("max_risk_usd", ""),
         "outcome":         outcome,
         "exit_price":      "",
         "exit_time":       "",

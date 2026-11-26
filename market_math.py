@@ -26,7 +26,8 @@ import config
 # 1. Module-Level Live FX Conversion Cache (Zero Extra API Credits)
 # ─────────────────────────────────────────────────────────────────────────────
 
-_LATEST_FX_RATES: dict[str, float] = {
+# Static reference fallbacks used only when live rates have not yet been observed in the current session
+_FALLBACK_FX_RATES: dict[str, float] = {
     "USD/JPY": 159.0,
     "AUD/USD": 0.657,
     "NZD/USD": 0.550,
@@ -34,6 +35,20 @@ _LATEST_FX_RATES: dict[str, float] = {
     "EUR/USD": 1.050,
     "GBP/USD": 1.260,
 }
+
+_LATEST_FX_RATES: dict[str, float] = {}
+
+
+def update_fx_rate(symbol: str, rate: float) -> None:
+    """Cache live exchange rate for pip value conversions."""
+    clean = symbol.split(" ")[0].upper()
+    _LATEST_FX_RATES[clean] = float(rate)
+
+
+def get_fx_rate(symbol: str) -> float | None:
+    """Retrieve live cached rate, or None if not yet observed."""
+    clean = symbol.split(" ")[0].upper()
+    return _LATEST_FX_RATES.get(clean)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -94,7 +109,7 @@ def _build_empty_result(
     Build a complete dict with safe default values for all 48 output keys
     when data validation fails upfront.
     """
-    min_math_score = 55 if (config.DEMO_MODE and getattr(config, "DEMO_DISCOVERY_MODE", False)) else 65
+    min_math_score = config.get_min_math_score() if hasattr(config, "get_min_math_score") else (55 if (config.DEMO_MODE and getattr(config, "DEMO_DISCOVERY_MODE", False)) else 65)
     max_risk_usd = round(config.ACCOUNT_BALANCE * config.MAX_RISK_PERCENT, 2)
     pip_val_usd = _get_pip_value_usd(symbol, current_price)
 
@@ -381,7 +396,7 @@ def analyse(
     result["math_setup_score"] = math_setup_score
     result["score_breakdown"] = score_breakdown
 
-    min_math_score = 55 if (config.DEMO_MODE and getattr(config, "DEMO_DISCOVERY_MODE", False)) else 65
+    min_math_score = config.get_min_math_score() if hasattr(config, "get_min_math_score") else (55 if (config.DEMO_MODE and getattr(config, "DEMO_DISCOVERY_MODE", False)) else 65)
     result["min_math_score"] = min_math_score
 
     # Hard Safety Rules (all must pass)
@@ -905,16 +920,37 @@ def _get_pip_value_usd(symbol: str, current_price: float) -> float:
     base_usd_key = f"{base}/USD"
     if base_usd_key in _LATEST_FX_RATES and current_price > 0:
         return pip_mult * (_LATEST_FX_RATES[base_usd_key] / current_price)
+    elif base_usd_key in _FALLBACK_FX_RATES and current_price > 0:
+        fallback_rate = _FALLBACK_FX_RATES[base_usd_key]
+        print(f"  [market_math] ⚠️ Fallback FX rate used for {base_usd_key} ({fallback_rate}).")
+        return pip_mult * (fallback_rate / current_price)
 
     if quote == "JPY":
-        usd_jpy = _LATEST_FX_RATES.get("USD/JPY", 159.0)
+        usd_jpy = _LATEST_FX_RATES.get("USD/JPY")
+        if usd_jpy is None:
+            usd_jpy = _FALLBACK_FX_RATES.get("USD/JPY", 159.0)
+            print(f"  [market_math] ⚠️ Fallback FX rate used for USD/JPY ({usd_jpy}).")
         return 1000.0 / usd_jpy if usd_jpy > 0 else 10.0
+
     if quote == "AUD":
-        return 10.0 * _LATEST_FX_RATES.get("AUD/USD", 0.657)
+        aud_usd = _LATEST_FX_RATES.get("AUD/USD")
+        if aud_usd is None:
+            aud_usd = _FALLBACK_FX_RATES.get("AUD/USD", 0.657)
+            print(f"  [market_math] ⚠️ Fallback FX rate used for AUD/USD ({aud_usd}).")
+        return 10.0 * aud_usd
+
     if quote == "NZD":
-        return 10.0 * _LATEST_FX_RATES.get("NZD/USD", 0.550)
+        nzd_usd = _LATEST_FX_RATES.get("NZD/USD")
+        if nzd_usd is None:
+            nzd_usd = _FALLBACK_FX_RATES.get("NZD/USD", 0.550)
+            print(f"  [market_math] ⚠️ Fallback FX rate used for NZD/USD ({nzd_usd}).")
+        return 10.0 * nzd_usd
+
     if quote == "CHF":
-        usd_chf = _LATEST_FX_RATES.get("USD/CHF", 0.880)
+        usd_chf = _LATEST_FX_RATES.get("USD/CHF")
+        if usd_chf is None:
+            usd_chf = _FALLBACK_FX_RATES.get("USD/CHF", 0.880)
+            print(f"  [market_math] ⚠️ Fallback FX rate used for USD/CHF ({usd_chf}).")
         return 10.0 / usd_chf if usd_chf > 0 else 10.0
 
     return 10.0

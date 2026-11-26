@@ -50,6 +50,7 @@ def fetch_candles(symbol: str, interval: str, outputsize: int) -> pd.DataFrame:
         "outputsize": outputsize,
         "apikey":     config.TWELVE_DATA_API_KEY,
         "format":     "JSON",
+        "timezone":   "UTC",
     }
 
     url = f"{config.TD_BASE_URL}/time_series"
@@ -189,7 +190,7 @@ def _parse_candles(raw_values: list[dict]) -> pd.DataFrame:
     df = df[["datetime", "open", "high", "low", "close"]]
 
     # Parse datetime — Twelve Data format: "2024-01-15 09:00:00"
-    df["datetime"] = pd.to_datetime(df["datetime"])
+    df["datetime"] = pd.to_datetime(df["datetime"], utc=True)
     df = df.set_index("datetime")
 
     # Twelve Data returns newest → oldest; flip to oldest → newest

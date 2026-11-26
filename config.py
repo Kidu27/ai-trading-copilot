@@ -14,6 +14,8 @@ load_dotenv()
 # ── API Keys ───────────────────────────────────────────────────────────────────
 TWELVE_DATA_API_KEY: str = os.getenv("TWELVE_DATA_API_KEY", "")
 GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
+GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
+OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
 
 # ── Telegram (optional alerts) ─────────────────────────────────────────────────
 TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -56,8 +58,12 @@ def get_min_risk_reward() -> float:
 def get_min_confluence_score() -> int:
     return 65 if (DEMO_MODE and DEMO_DISCOVERY_MODE) else 80
 
+def get_min_math_score() -> int:
+    return 55 if (DEMO_MODE and DEMO_DISCOVERY_MODE) else 65
+
 MIN_RISK_REWARD: float = get_min_risk_reward()
 MIN_CONFLUENCE_SCORE: int = get_min_confluence_score()
+MIN_MATH_SCORE: int = get_min_math_score()
 
 # ── Feature Flags ──────────────────────────────────────────────────────────────
 USE_V2_INDICATORS: bool = True      # Enable EMA 50/200, Fibonacci Golden Zone, ATR

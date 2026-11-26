@@ -91,27 +91,28 @@ def send_alert(
         math_dir = str(math_result.get("direction", "LONG")).upper()
         direction = "ENTER_LONG" if "LONG" in math_dir else "ENTER_SHORT"
 
+        fallback_score = int(math_result.get("math_setup_score") or config.get_min_confluence_score())
         fallback_ai = dict(ai_result)
         fallback_ai["decision"] = direction
-        fallback_ai["confluence_score"] = 65
+        fallback_ai["confluence_score"] = fallback_score
         fallback_ai["_math_approved_fallback"] = True
 
         signal = _build_signal(symbol, math_result, fallback_ai)
         signal["direction"] = direction
-        signal["confluence_score"] = 65
+        signal["confluence_score"] = fallback_score
         _save_pending_signal(signal)
 
         _print_ticket_box(
             symbol=symbol,
             direction=signal["direction"],
-            score=signal.get("confluence_score", 65),
+            score=signal.get("confluence_score", fallback_score),
             entry=signal.get("entry"),
             stop_loss=signal.get("stop_loss"),
             take_profit=signal.get("take_profit"),
             std_lots=signal.get("standard_lots", 0.01),
             units=signal.get("units", 1000),
             risk_reward=math_result.get("risk_reward_ratio"),
-            risk_usd=math_result.get("max_risk_usd"),
+            risk_usd=math_result.get("actual_risk_usd") or math_result.get("max_risk_usd"),
             signal_id=signal["signal_id"],
         )
 
@@ -149,7 +150,7 @@ def send_alert(
             std_lots=signal.get("standard_lots", 0.01),
             units=signal.get("units", 1000),
             risk_reward=trade_plan.get("risk_reward") or math_result.get("risk_reward_ratio"),
-            risk_usd=trade_plan.get("risk_usd") or math_result.get("max_risk_usd"),
+            risk_usd=trade_plan.get("risk_usd") or math_result.get("actual_risk_usd") or math_result.get("max_risk_usd"),
             signal_id=signal["signal_id"],
         )
 
@@ -219,7 +220,7 @@ def _build_signal(
         "units":           units,
         "confluence_score": ai_result.get("confluence_score", 0),
         "risk_reward":      trade_plan.get("risk_reward") or math_result.get("risk_reward_ratio", 2.0),
-        "risk_usd":         trade_plan.get("risk_usd") or math_result.get("max_risk_usd", 10.0),
+        "risk_usd":         trade_plan.get("risk_usd") or math_result.get("actual_risk_usd") or math_result.get("max_risk_usd", 10.0),
         "status":          "PENDING",   # PENDING | ACCEPTED | DECLINED | EXPIRED | EXECUTED
     }
 
@@ -322,7 +323,7 @@ def _format_card(
             f"  Stop Loss   : {trade_plan.get('stop_loss', '?')}",
             f"  Take Profit : {trade_plan.get('take_profit', '?')}",
             f"  R:R Ratio   : 1 : {trade_plan.get('risk_reward', '?')}",
-            f"  Risk (USD)  : ${trade_plan.get('risk_usd', '?')}",
+            f"  Risk (USD)  : ${trade_plan.get('risk_usd') or math_result.get('actual_risk_usd') or trade_plan.get('risk_usd', '?')}",
             f"  Std Lots    : {std_lots} lots  (MT5)",
             f"  Micro Lots  : {micro_lots} µlots (ref)",
             "",

@@ -101,12 +101,13 @@ def run_scan() -> None:
     for idx, symbol in enumerate(config.WATCHLIST):
         print(f"\n── Analysing {symbol} ─────────────────────────────────")
 
-        # ── Pair cooldown guard (4-hour deduplication) ────────────────────────
-        on_cooldown, hours_left = journal.check_pair_cooldown(symbol, hours=4)
+        # ── Pair cooldown guard ───────────────────────────────────────────────
+        cooldown_hours = getattr(config, "PAIR_COOLDOWN_HOURS", 1)
+        on_cooldown, hours_left = journal.check_pair_cooldown(symbol, hours=cooldown_hours)
         if on_cooldown:
             print(
-                f"  ⏳ {symbol} is on cooldown — last alert was < 4 hours ago. "
-                f"({hours_left}h remaining). Skipping."
+                f"  ⏳ {symbol} is on cooldown — last alert was < {cooldown_hours} hours ago. "
+                f"({hours_left:.1f}h remaining). Skipping."
             )
             continue
 
@@ -114,6 +115,8 @@ def run_scan() -> None:
         try:
             df_1h, df_15m = data_fetcher.fetch_pair_data(symbol)
             fetched_15m_by_pair[symbol] = df_15m
+            if df_1h is not None and not df_1h.empty:
+                market_math.update_fx_rate(symbol, float(df_1h["close"].iloc[-1]))
         except RuntimeError as exc:
             print(f"  [Gate 1 FAILED] {exc}")
             continue
@@ -138,7 +141,7 @@ def run_scan() -> None:
 
         # GATE 3: AI audit (only if Gate 2 passes)
         if gate2_pass:
-            print(f"  [Gate 3] Sending to Gemini AI auditor …")
+            print(f"  [Gate 3] Sending to AI auditor …")
             ai_result = ai_auditor.audit(math_result)
             decision  = ai_result.get("decision", "NO_TRADE")
             score     = ai_result.get("confluence_score", 0)
@@ -203,21 +206,26 @@ def run_scan() -> None:
             journal.log_setup(symbol, math_result, ai_result)
 
         # Notification filter:
-        # ONLY send Telegram signal cards for actionable ENTER_LONG / ENTER_SHORT setups
-        # (interactive cards with Accept / Decline buttons, plus MATH-APPROVED fallback cards if AI fails).
-        # Do NOT send Telegram alerts for plain NO_TRADE scans when NOTIFY_NO_TRADE is False.
-        # Keep SHADOW_LONG / SHADOW_SHORT silent as before.
-        notify_no_trade = getattr(config, "NOTIFY_NO_TRADE", False)
+        # Respect config.NOTIFY_MODE:
+        #   - "TRADES_ONLY": only actionable setups (ENTER_LONG/ENTER_SHORT or math-approved fallback)
+        #   - "GATE2_ONLY": setups passing Gate 2 math (actionable or Gemini NO_TRADE rejections)
+        #   - "ALL": all evaluated pairs
+        # Always keep SHADOW_* setups completely silent.
+        notify_mode = getattr(config, "NOTIFY_MODE", "TRADES_ONLY").upper()
         is_actionable = decision in ("ENTER_LONG", "ENTER_SHORT")
         is_math_fallback = (decision == "NO_TRADE" and gate2_pass and bool(ai_result.get("_fail_safe")))
         is_shadow = decision in ("SHADOW_LONG", "SHADOW_SHORT")
 
-        if is_actionable or is_math_fallback:
-            should_alert = True
-        elif is_shadow:
+        if is_shadow:
             should_alert = False
-        elif decision == "NO_TRADE":
-            should_alert = notify_no_trade
+        elif is_actionable or is_math_fallback:
+            should_alert = True
+        elif notify_mode == "ALL":
+            should_alert = True
+        elif notify_mode == "GATE2_ONLY":
+            should_alert = gate2_pass
+        elif notify_mode == "TRADES_ONLY":
+            should_alert = getattr(config, "NOTIFY_NO_TRADE", False)
         else:
             should_alert = False
 

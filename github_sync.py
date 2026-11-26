@@ -12,7 +12,9 @@ Features:
 """
 
 import base64
+import hashlib
 import os
+import threading
 from typing import Any
 
 import requests
@@ -24,6 +26,8 @@ import pattern_stats
 import post_mortem
 
 _BASE_DIR = os.path.dirname(__file__)
+_SYNC_LOCK = threading.Lock()
+_LAST_PUSHED_HASHES: dict[str, str] = {}
 
 
 def _get_config() -> tuple[str, str, str]:
@@ -119,97 +123,107 @@ def pull_memory_files() -> bool:
     if not is_enabled():
         return False
 
-    token, repo, branch = _get_config()
-    headers = _get_headers(token)
+    with _SYNC_LOCK:
+        token, repo, branch = _get_config()
+        headers = _get_headers(token)
 
-    if not _ensure_memory_branch(token, repo, branch):
-        return False
+        if not _ensure_memory_branch(token, repo, branch):
+            return False
 
-    files = _get_target_files()
-    pulled_count = 0
+        files = _get_target_files()
+        pulled_count = 0
 
-    for local_path, filename in files:
-        url = f"https://api.github.com/repos/{repo}/contents/{filename}?ref={branch}"
-        try:
-            resp = requests.get(url, headers=headers, timeout=15)
-            if resp.status_code == 200:
-                data = resp.json()
-                content_b64 = data.get("content", "")
-                encoding = data.get("encoding", "base64")
-                if encoding == "base64" and content_b64:
-                    raw_bytes = base64.b64decode(content_b64.encode("ascii"))
-                    os.makedirs(os.path.dirname(local_path), exist_ok=True)
-                    with open(local_path, "wb") as fh:
-                        fh.write(raw_bytes)
-                    pulled_count += 1
-                    print(f"  [github_sync] 📥 Restored {filename} from '{branch}' branch ({len(raw_bytes)} bytes).")
-            elif resp.status_code == 404:
-                print(f"  [github_sync] ℹ️ {filename} not yet on '{branch}' branch (initial run).")
-            else:
-                print(f"  [github_sync] ⚠️ Failed to fetch {filename}: {resp.status_code}")
-        except Exception as exc:
-            print(f"  [github_sync] Error pulling {filename}: {exc}")
+        for local_path, filename in files:
+            url = f"https://api.github.com/repos/{repo}/contents/{filename}?ref={branch}"
+            try:
+                resp = requests.get(url, headers=headers, timeout=15)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    content_b64 = data.get("content", "")
+                    encoding = data.get("encoding", "base64")
+                    if encoding == "base64" and content_b64:
+                        raw_bytes = base64.b64decode(content_b64.encode("ascii"))
+                        os.makedirs(os.path.dirname(local_path), exist_ok=True)
+                        with open(local_path, "wb") as fh:
+                            fh.write(raw_bytes)
+                        pulled_count += 1
+                        _LAST_PUSHED_HASHES[local_path] = hashlib.sha256(raw_bytes).hexdigest()
+                        print(f"  [github_sync] 📥 Restored {filename} from '{branch}' branch ({len(raw_bytes)} bytes).")
+                elif resp.status_code == 404:
+                    print(f"  [github_sync] ℹ️ {filename} not yet on '{branch}' branch (initial run).")
+                else:
+                    print(f"  [github_sync] ⚠️ Failed to fetch {filename}: {resp.status_code}")
+            except Exception as exc:
+                print(f"  [github_sync] Error pulling {filename}: {exc}")
 
-    print(f"  [github_sync] Memory pull complete: {pulled_count}/{len(files)} files restored.")
-    return pulled_count > 0
+        print(f"  [github_sync] Memory pull complete: {pulled_count}/{len(files)} files restored.")
+        return pulled_count > 0
 
 
 def push_memory_files(commit_msg: str = "Update trading memory state") -> bool:
     """
     Commit and push current local memory files to the dedicated memory branch.
     Fetches the current remote file SHA first to ensure safe updates.
+    Skips pushing files whose bytes have not changed.
     """
     if not is_enabled():
         return False
 
-    token, repo, branch = _get_config()
-    headers = _get_headers(token)
+    with _SYNC_LOCK:
+        token, repo, branch = _get_config()
+        headers = _get_headers(token)
 
-    files = _get_target_files()
-    success_count = 0
+        files = _get_target_files()
+        success_count = 0
 
-    for local_path, filename in files:
-        if not os.path.exists(local_path):
-            continue
+        for local_path, filename in files:
+            if not os.path.exists(local_path):
+                continue
 
-        try:
-            with open(local_path, "rb") as fh:
-                raw_bytes = fh.read()
+            try:
+                with open(local_path, "rb") as fh:
+                    raw_bytes = fh.read()
 
-            b64_content = base64.b64encode(raw_bytes).decode("ascii")
+                current_hash = hashlib.sha256(raw_bytes).hexdigest()
+                if _LAST_PUSHED_HASHES.get(local_path) == current_hash:
+                    # Bytes unchanged, skip pushing
+                    continue
 
-            # 1. Fetch current remote SHA if file exists on memory branch
-            url = f"https://api.github.com/repos/{repo}/contents/{filename}?ref={branch}"
-            get_resp = requests.get(url, headers=headers, timeout=15)
-            current_sha = None
-            if get_resp.status_code == 200:
-                current_sha = get_resp.json().get("sha")
+                b64_content = base64.b64encode(raw_bytes).decode("ascii")
 
-            # 2. Put file to commit on memory branch
-            put_url = f"https://api.github.com/repos/{repo}/contents/{filename}"
-            put_payload: dict[str, Any] = {
-                "message": f"[memory] {commit_msg} ({filename})",
-                "content": b64_content,
-                "branch": branch,
-            }
-            if current_sha:
-                put_payload["sha"] = current_sha
+                # 1. Fetch current remote SHA if file exists on memory branch
+                url = f"https://api.github.com/repos/{repo}/contents/{filename}?ref={branch}"
+                get_resp = requests.get(url, headers=headers, timeout=15)
+                current_sha = None
+                if get_resp.status_code == 200:
+                    current_sha = get_resp.json().get("sha")
 
-            put_resp = requests.put(put_url, headers=headers, json=put_payload, timeout=20)
+                # 2. Put file to commit on memory branch
+                put_url = f"https://api.github.com/repos/{repo}/contents/{filename}"
+                put_payload: dict[str, Any] = {
+                    "message": f"[memory] {commit_msg} ({filename})",
+                    "content": b64_content,
+                    "branch": branch,
+                }
+                if current_sha:
+                    put_payload["sha"] = current_sha
 
-            # Retry once on 409 conflict
-            if put_resp.status_code == 409:
-                latest_resp = requests.get(url, headers=headers, timeout=15)
-                if latest_resp.status_code == 200:
-                    put_payload["sha"] = latest_resp.json().get("sha")
-                    put_resp = requests.put(put_url, headers=headers, json=put_payload, timeout=20)
+                put_resp = requests.put(put_url, headers=headers, json=put_payload, timeout=20)
 
-            if put_resp.status_code in (200, 201):
-                success_count += 1
-                print(f"  [github_sync] 📤 Pushed {filename} to '{branch}' branch ({len(raw_bytes)} bytes).")
-            else:
-                print(f"  [github_sync] ⚠️ Failed to commit {filename}: {put_resp.status_code} {put_resp.text}")
-        except Exception as exc:
-            print(f"  [github_sync] Error pushing {filename}: {exc}")
+                # Retry once on 409 conflict
+                if put_resp.status_code == 409:
+                    latest_resp = requests.get(url, headers=headers, timeout=15)
+                    if latest_resp.status_code == 200:
+                        put_payload["sha"] = latest_resp.json().get("sha")
+                        put_resp = requests.put(put_url, headers=headers, json=put_payload, timeout=20)
 
-    return success_count > 0
+                if put_resp.status_code in (200, 201):
+                    success_count += 1
+                    _LAST_PUSHED_HASHES[local_path] = current_hash
+                    print(f"  [github_sync] 📤 Pushed {filename} to '{branch}' branch ({len(raw_bytes)} bytes).")
+                else:
+                    print(f"  [github_sync] ⚠️ Failed to commit {filename}: {put_resp.status_code} {put_resp.text}")
+            except Exception as exc:
+                print(f"  [github_sync] Error pushing {filename}: {exc}")
+
+        return success_count > 0
