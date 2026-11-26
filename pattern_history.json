@@ -738,5 +738,24 @@
     "outcome": "PENDING",
     "pnl_usd": 0.0,
     "is_shadow_candidate": false
+  },
+  "2fce55ae-8a00-4bcd-acaf-fe2e04ceca6f": {
+    "signal_id": "2fce55ae-8a00-4bcd-acaf-fe2e04ceca6f",
+    "timestamp_eat": "2026-11-26 11:16:08",
+    "pair": "GBP/AUD",
+    "direction": "SHADOW_LONG",
+    "rsi_14_15m": 51.0,
+    "ema_signal": "BULLISH",
+    "ema_gap_pips": 62.7,
+    "atr_15m": 0.00139,
+    "in_fib_golden_zone": false,
+    "candle_pattern": "NEUTRAL",
+    "body_pct": 0.229,
+    "news_bias": "NEUTRAL",
+    "confluence_score": 50,
+    "session_tag": "LONDON_OPEN",
+    "outcome": "SHADOW_PENDING",
+    "pnl_usd": 0.0,
+    "is_shadow_candidate": true
   }
 }
