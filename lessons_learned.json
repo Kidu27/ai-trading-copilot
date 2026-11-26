@@ -33,5 +33,19 @@
     "outcome": "LOSS",
     "actionable_lesson": "Require a confirming 15\u2011minute close above the high of the previous candle and a minimum 10\u2011pip upward move before entering long to avoid setups that lack immediate bullish momentum.",
     "root_cause": "The price reversed sharply after the 08:30\u202f15\u2011minute candle closed below the entry, pulling the market into the stop\u2011loss zone within two candles."
+  },
+  {
+    "timestamp_eat": "2026-11-26 13:30:00",
+    "pair": "GBP/NZD",
+    "outcome": "SHADOW_LOSS",
+    "actionable_lesson": "Require a confirming 1H lower\u2011high/lower\u2011low bias (or clear break of the 1H trend) before taking any short entry on the 15m trigger.",
+    "root_cause": "The price broke above the short entry zone and rapidly moved into the higher\u2011timeframe bullish structure, hitting the stop\u2011loss before any reversal could develop."
+  },
+  {
+    "timestamp_eat": "2026-11-26 13:30:00",
+    "pair": "GBP/NZD",
+    "outcome": "SHADOW_LOSS",
+    "actionable_lesson": "In future short setups, require a confirming bearish 15\u2011minute candle after entry and abort the trade if the next candle makes a higher high within the S/R\u2011Fib zone.",
+    "root_cause": "The price reversed upward and breached the stop\u2011loss because the 15\u2011minute candles after entry formed higher highs, indicating a short\u2011term bullish momentum contrary to the intended short bias."
   }
 ]
