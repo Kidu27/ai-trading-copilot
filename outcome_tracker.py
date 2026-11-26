@@ -203,19 +203,49 @@ def check_open_signal_outcomes(candles_by_pair: dict[str, pd.DataFrame] | None =
             row["decision"] = decision
             updated_rows_needed = True
 
-        # Parse timestamp and verify window
-        row_dt = None
-        if ts_str:
-            try:
-                parsed_dt = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
-                row_dt = eat_tz.localize(parsed_dt)
-            except Exception:
-                row_dt = None
+        # If timestamp_eat is missing in row, fallback to matched_pending or act_trade
+        if not ts_str:
+            ts_str = (
+                (matched_pending.get("timestamp_eat", "") if matched_pending else "")
+                or act_trade.get("timestamp_eat", "")
+                or act_trade.get("opened_eat", "")
+            ).strip()
 
-        if row_dt and row_dt < cutoff_time and signal_id not in active_trades:
+        # Parse timestamp and verify window
+        if not ts_str:
             continue
-        if not row_dt:
-            row_dt = now_eat - timedelta(hours=12)
+
+        try:
+            parsed_dt = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
+            entry_time_eat = eat_tz.localize(parsed_dt)
+            entry_time_utc = entry_time_eat.astimezone(pytz.utc)
+        except Exception:
+            continue
+
+        now_utc = datetime.now(tz=pytz.utc)
+        age_seconds = (now_utc - entry_time_utc).total_seconds()
+
+        # Explicit PENDING Lock Guard:
+        # Explicitly skip any signal whose status in pending_signals.json is "PENDING"
+        # and is under 15 minutes old, so it can NEVER mark a brand-new actionable signal as
+        # CLOSED_SHADOW_LOSS before the user has a chance to tap Accept or Decline.
+        is_pending = False
+        if matched_pending and str(matched_pending.get("status", "")).upper() == "PENDING":
+            is_pending = True
+        elif signal_id and str(pending_store.get(signal_id, {}).get("status", "")).upper() == "PENDING":
+            is_pending = True
+
+        if is_pending and age_seconds < 15 * 60:
+            print(f"  [outcome_tracker] 🔒 Signal {signal_id[:8]}… ({pair}) is PENDING user action ({int(age_seconds)}s / 900s) — skipping.")
+            continue
+
+        # 1. Never evaluate or resolve any trade (manual or shadow) whose timestamp_eat is less than 15 minutes old
+        if age_seconds < 15 * 60:
+            continue
+
+        # Skip older than 48h unless active in active_trades
+        if entry_time_eat < cutoff_time and signal_id not in active_trades:
+            continue
 
         # Fetch 15m candles
         df_15m = None
@@ -223,7 +253,7 @@ def check_open_signal_outcomes(candles_by_pair: dict[str, pd.DataFrame] | None =
             df_15m = candles_by_pair[pair]
         elif data_fetcher and config.TWELVE_DATA_API_KEY:
             try:
-                elapsed_hours = max((now_eat - row_dt).total_seconds() / 3600.0, 1.0)
+                elapsed_hours = max(age_seconds / 3600.0, 1.0)
                 req_candles = max(int(elapsed_hours * 4) + 10, 30)
                 df_15m = data_fetcher.fetch_candles(pair, "15min", min(req_candles, 200))
             except Exception as exc:
@@ -241,18 +271,29 @@ def check_open_signal_outcomes(candles_by_pair: dict[str, pd.DataFrame] | None =
         for candle_ts, candle in df_15m.iterrows():
             try:
                 c_dt = pd.to_datetime(candle_ts)
+                if isinstance(c_dt, pd.Timestamp):
+                    c_dt = c_dt.to_pydatetime()
                 if c_dt.tzinfo is None:
-                    c_dt_eat = pytz.utc.localize(c_dt).astimezone(eat_tz)
+                    # Twelve Data returns naive UTC timestamps for Forex
+                    candle_open_utc = pytz.utc.localize(c_dt)
                 else:
-                    c_dt_eat = c_dt.astimezone(eat_tz)
+                    candle_open_utc = c_dt.astimezone(pytz.utc)
             except Exception:
                 continue
 
-            if c_dt_eat <= row_dt:
+            candle_close_utc = candle_open_utc + timedelta(minutes=15)
+
+            # Only inspect closed 15m candles whose candle open time is strictly greater than entry_time_utc
+            # (i.e. candle_open_utc >= entry_time_utc and candle_close_utc <= now_utc)
+            if candle_open_utc < entry_time_utc:
+                continue
+            if candle_close_utc > now_utc:
                 continue
 
             c_high = float(candle.get("high", 0.0))
             c_low = float(candle.get("low", 0.0))
+
+            candle_eat_str = candle_close_utc.astimezone(eat_tz).strftime("%Y-%m-%d %H:%M:%S")
 
             if decision in ("ENTER_LONG", "SHADOW_LONG"):
                 # For LONG: if candle low <= stop_loss -> LOSS; elif candle high >= take_profit -> WIN
@@ -260,12 +301,12 @@ def check_open_signal_outcomes(candles_by_pair: dict[str, pd.DataFrame] | None =
                 if c_low <= sl:
                     hit_outcome = "LOSS"
                     hit_price = sl
-                    hit_time_str = c_dt_eat.strftime("%Y-%m-%d %H:%M:%S")
+                    hit_time_str = candle_eat_str
                     break
                 elif c_high >= tp:
                     hit_outcome = "WIN"
                     hit_price = tp
-                    hit_time_str = c_dt_eat.strftime("%Y-%m-%d %H:%M:%S")
+                    hit_time_str = candle_eat_str
                     break
             elif decision in ("ENTER_SHORT", "SHADOW_SHORT"):
                 # For SHORT: if candle high >= stop_loss -> LOSS; elif candle low <= take_profit -> WIN
@@ -273,12 +314,12 @@ def check_open_signal_outcomes(candles_by_pair: dict[str, pd.DataFrame] | None =
                 if c_high >= sl:
                     hit_outcome = "LOSS"
                     hit_price = sl
-                    hit_time_str = c_dt_eat.strftime("%Y-%m-%d %H:%M:%S")
+                    hit_time_str = candle_eat_str
                     break
                 elif c_low <= tp:
                     hit_outcome = "WIN"
                     hit_price = tp
-                    hit_time_str = c_dt_eat.strftime("%Y-%m-%d %H:%M:%S")
+                    hit_time_str = candle_eat_str
                     break
 
         if not hit_outcome:

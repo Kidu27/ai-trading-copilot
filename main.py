@@ -202,20 +202,24 @@ def run_scan() -> None:
         else:
             journal.log_setup(symbol, math_result, ai_result)
 
-        # 3-tier notification filter
-        notify_mode = getattr(config, "NOTIFY_MODE", "GATE2_ONLY").upper()
-        if decision in ("SHADOW_LONG", "SHADOW_SHORT"):
-            should_alert = (notify_mode == "ALL")
-        elif notify_mode == "ALL":
+        # Notification filter:
+        # ONLY send Telegram signal cards for actionable ENTER_LONG / ENTER_SHORT setups
+        # (interactive cards with Accept / Decline buttons, plus MATH-APPROVED fallback cards if AI fails).
+        # Do NOT send Telegram alerts for plain NO_TRADE scans when NOTIFY_NO_TRADE is False.
+        # Keep SHADOW_LONG / SHADOW_SHORT silent as before.
+        notify_no_trade = getattr(config, "NOTIFY_NO_TRADE", False)
+        is_actionable = decision in ("ENTER_LONG", "ENTER_SHORT")
+        is_math_fallback = (decision == "NO_TRADE" and gate2_pass and bool(ai_result.get("_fail_safe")))
+        is_shadow = decision in ("SHADOW_LONG", "SHADOW_SHORT")
+
+        if is_actionable or is_math_fallback:
             should_alert = True
-        elif notify_mode == "GATE2_ONLY":
-            should_alert = gate2_pass or decision in ("ENTER_LONG", "ENTER_SHORT")
-        elif notify_mode == "TRADES_ONLY":
-            should_alert = decision in ("ENTER_LONG", "ENTER_SHORT") or (
-                gate2_pass and bool(ai_result.get("_fail_safe"))
-            )
+        elif is_shadow:
+            should_alert = False
+        elif decision == "NO_TRADE":
+            should_alert = notify_no_trade
         else:
-            should_alert = gate2_pass or decision in ("ENTER_LONG", "ENTER_SHORT")
+            should_alert = False
 
         if should_alert:
             notifier.send_alert(symbol, math_result, ai_result)

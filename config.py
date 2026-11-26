@@ -72,8 +72,8 @@ TD_15M_CANDLES: int = 50            # How many 15m candles to fetch
 
 # ── Signal Approval & Expiry ──────────────────────────────────────────────────
 SIGNAL_EXPIRY_MINUTES: int = 15     # Telegram approval buttons expire after N minutes
-NOTIFY_NO_TRADE: bool = True        # True = send NO_TRADE cards to Telegram; False = quiet mode (actionable only)
-NOTIFY_MODE: str = "GATE2_ONLY"     # Supported: "ALL", "GATE2_ONLY", "TRADES_ONLY"
+NOTIFY_NO_TRADE: bool = os.getenv("NOTIFY_NO_TRADE", "false").lower() in ("true", "1")  # False = quiet mode (actionable only)
+NOTIFY_MODE: str = os.getenv("NOTIFY_MODE", "TRADES_ONLY")     # Supported: "ALL", "GATE2_ONLY", "TRADES_ONLY"
 
 # ── MetaTrader 5 macOS File-Bridge (optional) ──────────────────────────────────
 # Set to the absolute path of MetaTrader 5's MQL5/Files directory on macOS,

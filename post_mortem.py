@@ -16,9 +16,11 @@ When a demo or live trade closes (hits Stop-Loss or Take-Profit):
 
 import json
 import os
+import re
 from datetime import datetime
 from typing import Any
 
+import requests
 import pytz
 import pandas as pd
 
@@ -144,6 +146,34 @@ def save_active_trades(trades: dict[str, Any]) -> None:
 # AI Post-Mortem Analysis
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _clean_json_text(text: str) -> str:
+    """
+    Strip markdown code fences (e.g. ```json ... ```) and leading/trailing whitespace
+    so json.loads() receives clean JSON.
+    """
+    raw = text.strip()
+    if "```" in raw:
+        start_fence = raw.find("```")
+        end_fence = raw.rfind("```")
+        if start_fence != -1 and end_fence != -1 and end_fence > start_fence:
+            inner = raw[start_fence:end_fence]
+            first_nl = inner.find("\n")
+            if first_nl != -1:
+                return inner[first_nl + 1:].strip()
+            return inner.lstrip("`").strip()
+    if raw.startswith("```"):
+        first_newline = raw.find("\n")
+        if first_newline != -1:
+            raw = raw[first_newline + 1:]
+        else:
+            raw = raw.lstrip("`")
+    if raw.endswith("```"):
+        last_fence = raw.rfind("```")
+        if last_fence != -1:
+            raw = raw[:last_fence]
+    return raw.strip()
+
+
 def analyze_trade_with_ai(
     trade: dict[str, Any],
     exit_price: float,
@@ -151,8 +181,11 @@ def analyze_trade_with_ai(
     candles_df: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
     """
-    Call GEMINI_MODEL via google-genai to diagnose the closed trade.
-    Falls back to a deterministic, conservative diagnosis if Gemini is unavailable.
+    Diagnose a closed trade using multi-provider AI risk managers:
+      Tier 1: GroqCloud (Primary)
+      Tier 2: OpenRouter (Secondary)
+      Tier 3: Gemini Fallback (Single model)
+    Falls back to a deterministic, conservative diagnosis if all AI providers fail.
     """
     pair        = trade.get("pair", "EUR/USD")
     direction   = trade.get("direction", "ENTER_LONG")
@@ -194,73 +227,161 @@ def analyze_trade_with_ai(
         f"Provide your 3-field post-mortem JSON now."
     )
 
-    if _GENAI_AVAILABLE and config.GEMINI_API_KEY:
+    # ── Tier 1: Primary — GroqCloud ──────────────────────────────────────────
+    groq_key = os.getenv("GROQ_API_KEY", "").strip() or getattr(config, "GROQ_API_KEY", "").strip()
+    if groq_key:
+        groq_models = ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]
+        for model_id in groq_models:
+            try:
+                resp = requests.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {groq_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": model_id,
+                        "temperature": 0.1,
+                        "max_tokens": 600,
+                        "reasoning_effort": "low",
+                        "response_format": {"type": "json_object"},
+                        "messages": [
+                            {"role": "system", "content": _POST_MORTEM_SYSTEM_PROMPT},
+                            {"role": "user", "content": user_prompt},
+                        ],
+                    },
+                    timeout=(5, 25),
+                )
+                if resp.status_code != 200:
+                    print(f"  [post_mortem] Warning: Groq ({model_id}) returned HTTP {resp.status_code}")
+                    continue
+
+                data = resp.json()
+                choices = data.get("choices")
+                if not choices:
+                    continue
+                content = choices[0].get("message", {}).get("content", "")
+                raw_text = _clean_json_text(content)
+                if not raw_text:
+                    continue
+
+                parsed = json.loads(raw_text)
+                if parsed.get("root_cause") and parsed.get("actionable_lesson"):
+                    print(f"  [post_mortem] ✅ Diagnosed via Groq ({model_id})")
+                    return {
+                        "root_cause": str(parsed.get("root_cause", "")).strip(),
+                        "rule_followed": str(parsed.get("rule_followed", "")).strip(),
+                        "actionable_lesson": str(parsed.get("actionable_lesson", "")).strip(),
+                    }
+            except Exception as err:
+                print(f"  [post_mortem] Warning: Groq ({model_id}) failed: {err}")
+                continue
+
+    # ── Tier 2: Secondary — OpenRouter ───────────────────────────────────────
+    or_key = os.getenv("OPENROUTER_API_KEY", "").strip() or getattr(config, "OPENROUTER_API_KEY", "").strip()
+    if or_key:
+        openrouter_models = ["nvidia/nemotron-3-ultra-550b-a55b:free", "openrouter/free"]
+        for model_id in openrouter_models:
+            try:
+                resp = requests.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {or_key}",
+                        "Content-Type": "application/json",
+                        "X-Title": "VanguardFX Post-Mortem",
+                    },
+                    json={
+                        "model": model_id,
+                        "temperature": 0.1,
+                        "max_tokens": 600,
+                        "messages": [
+                            {"role": "system", "content": _POST_MORTEM_SYSTEM_PROMPT},
+                            {"role": "user", "content": user_prompt},
+                        ],
+                    },
+                    timeout=(5, 25),
+                )
+                if resp.status_code != 200:
+                    print(f"  [post_mortem] Warning: OpenRouter ({model_id}) returned HTTP {resp.status_code}")
+                    continue
+
+                data = resp.json()
+                choices = data.get("choices")
+                if not choices:
+                    continue
+                content = choices[0].get("message", {}).get("content", "")
+                raw_text = _clean_json_text(content)
+                if not raw_text:
+                    continue
+
+                parsed = json.loads(raw_text)
+                if parsed.get("root_cause") and parsed.get("actionable_lesson"):
+                    print(f"  [post_mortem] ✅ Diagnosed via OpenRouter ({model_id})")
+                    return {
+                        "root_cause": str(parsed.get("root_cause", "")).strip(),
+                        "rule_followed": str(parsed.get("rule_followed", "")).strip(),
+                        "actionable_lesson": str(parsed.get("actionable_lesson", "")).strip(),
+                    }
+            except Exception as err:
+                print(f"  [post_mortem] Warning: OpenRouter ({model_id}) failed: {err}")
+                continue
+
+    # ── Tier 3: Tertiary — Single Gemini Fallback ────────────────────────────
+    gemini_key = getattr(config, "GEMINI_API_KEY", "") or os.getenv("GEMINI_API_KEY", "").strip()
+    if _GENAI_AVAILABLE and gemini_key:
         try:
             http_opts = (
                 types.HttpOptions(timeout=15000, retry_options=types.HttpRetryOptions(attempts=1))
                 if hasattr(types, "HttpOptions") and hasattr(types, "HttpRetryOptions")
                 else None
             )
-            client = genai.Client(api_key=config.GEMINI_API_KEY, http_options=http_opts) if http_opts else genai.Client(api_key=config.GEMINI_API_KEY)
+            client = genai.Client(api_key=gemini_key, http_options=http_opts) if http_opts else genai.Client(api_key=gemini_key)
             gen_kwargs: dict[str, Any] = {
                 "system_instruction": _POST_MORTEM_SYSTEM_PROMPT,
                 "response_mime_type": "application/json",
                 "temperature": 0.2,
-                "max_output_tokens": 1024,
+                "max_output_tokens": 600,
             }
             if _PYDANTIC_AVAILABLE:
                 gen_kwargs["response_schema"] = PostMortemAnalysis
 
-            fallback_models = [
-                "gemini-3.5-flash-lite",
-                "gemini-3.8-flash",
-                "gemma-4-31b-it",
-                "gemma-4-26b-a4b-it",
-            ]
-            response = None
-            last_err = None
-            for model_name in fallback_models:
-                cfg = dict(gen_kwargs)
-                try:
-                    try:
-                        response = client.models.generate_content(
-                            model=model_name,
-                            contents=user_prompt,
-                            config=types.GenerateContentConfig(**cfg),
-                        )
-                    except Exception as call_err:
-                        err_str = str(call_err).upper()
-                        if (
-                            "400" in err_str
-                            or "INVALID_ARGUMENT" in err_str
-                            or "INVALIDARGUMENT" in err_str
-                            or "SCHEMA" in err_str
-                        ) and "response_schema" in cfg:
-                            cfg.pop("response_schema", None)
-                            response = client.models.generate_content(
-                                model=model_name,
-                                contents=user_prompt,
-                                config=types.GenerateContentConfig(**cfg),
-                            )
-                        else:
-                            raise call_err
-                    if response and response.text and response.text.strip():
-                        break
-                except Exception as err:  # noqa: BLE001
-                    last_err = err
-                    print(f"  [post_mortem] Model {model_name} failed: {err}. Retrying fallback...")
-                    continue
-            if response is None and last_err is not None:
-                raise last_err
-                
-            data = json.loads(response.text.strip())
-            return {
-                "root_cause": data.get("root_cause", "").strip(),
-                "rule_followed": data.get("rule_followed", "").strip(),
-                "actionable_lesson": data.get("actionable_lesson", "").strip(),
-            }
+            try:
+                response = client.models.generate_content(
+                    model="gemini-3.5-flash-lite",
+                    contents=user_prompt,
+                    config=types.GenerateContentConfig(**gen_kwargs),
+                )
+            except Exception as call_err:
+                err_str = str(call_err).upper()
+                if (
+                    "400" in err_str
+                    or "INVALID_ARGUMENT" in err_str
+                    or "INVALIDARGUMENT" in err_str
+                    or "SCHEMA" in err_str
+                ) and "response_schema" in gen_kwargs:
+                    gen_kwargs.pop("response_schema", None)
+                    response = client.models.generate_content(
+                        model="gemini-3.5-flash-lite",
+                        contents=user_prompt,
+                        config=types.GenerateContentConfig(**gen_kwargs),
+                    )
+                else:
+                    raise call_err
+
+            if response and response.text and response.text.strip():
+                raw_text = _clean_json_text(response.text)
+                parsed = json.loads(raw_text)
+                if parsed.get("root_cause") and parsed.get("actionable_lesson"):
+                    print("  [post_mortem] ✅ Diagnosed via Gemini (gemini-3.5-flash-lite)")
+                    return {
+                        "root_cause": str(parsed.get("root_cause", "")).strip(),
+                        "rule_followed": str(parsed.get("rule_followed", "")).strip(),
+                        "actionable_lesson": str(parsed.get("actionable_lesson", "")).strip(),
+                    }
         except Exception as exc:
-            print(f"  [post_mortem] Gemini call failed ({exc}), using rule-based diagnostic.")
+            print(f"  [post_mortem] Gemini fallback failed: {exc}")
+
+    print("  [post_mortem] All AI providers exhausted, using rule-based diagnostic.")
 
     # Deterministic fallback diagnostic
     if outcome.upper() == "LOSS":

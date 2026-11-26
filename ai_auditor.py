@@ -96,9 +96,69 @@ if _PYDANTIC_AVAILABLE:
 # System prompt — the AI's immutable rule book
 # ─────────────────────────────────────────────────────────────────────────────
 
-_BASE_SYSTEM_PROMPT = """
-You are an elite Forex risk management auditor for a retail trader with a small \
-$500 account. Your ONLY job is to audit whether the mathematical setup presented \
+_WORD_TO_NUM: dict[str, int] = {
+    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+    "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
+    "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19,
+    "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50,
+    "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90,
+    "hundred": 100,
+}
+
+
+def _parse_score(val: Any) -> int:
+    """
+    Safely parse confluence_score from int, float, numeric string,
+    or English number words (e.g. 'fifty', 'sixty-five', '80%') without raising ValueError.
+    """
+    if val is None:
+        return 0
+    if isinstance(val, (int, float)):
+        return int(val)
+    if isinstance(val, str):
+        val_clean = val.strip().lower()
+        try:
+            return int(round(float(val_clean)))
+        except ValueError:
+            pass
+
+        match = re.search(r"\b(\d{1,3})\b", val_clean)
+        if match:
+            return int(match.group(1))
+
+        words = re.findall(r"[a-z]+", val_clean.replace("-", " "))
+        total = 0
+        current = 0
+        matched_any = False
+        for w in words:
+            if w in _WORD_TO_NUM:
+                matched_any = True
+                num = _WORD_TO_NUM[w]
+                if num == 100:
+                    current = (current if current else 1) * 100
+                else:
+                    current += num
+            elif w == "and":
+                continue
+            else:
+                total += current
+                current = 0
+        total += current
+        if matched_any:
+            return min(max(total, 0), 100)
+    return 0
+
+
+def _build_base_system_prompt() -> str:
+    """Build the base system prompt with dynamic score, R:R thresholds, and account balance."""
+    min_score = config.get_min_confluence_score() if hasattr(config, "get_min_confluence_score") else config.MIN_CONFLUENCE_SCORE
+    min_rr = config.get_min_risk_reward() if hasattr(config, "get_min_risk_reward") else config.MIN_RISK_REWARD
+    acct_balance = getattr(config, "ACCOUNT_BALANCE", 1000.0)
+
+    return f"""
+You are an elite Forex risk management auditor for a retail trader with a \
+${acct_balance:.0f} account. Your ONLY job is to audit whether the mathematical setup presented \
 to you meets ALL criteria for a high-probability trade signal.
 
 ## CORE RULES — NON-NEGOTIABLE
@@ -106,7 +166,9 @@ to you meets ALL criteria for a high-probability trade signal.
 2. You NEVER invent prices, calculate lot sizes, or guess market data.
    All numbers come from the Python math engine — you only reason about them.
 3. You NEVER recommend trading when the 1H trend is RANGING.
-4. Any Confluence Score below 80 MUST produce `NO_TRADE`.
+4. Any Confluence Score below {min_score} MUST produce `NO_TRADE`.
+5. If `confluence_score >= {min_score}` and the setup aligns with `trend_1h`, `decision` MUST be `ENTER_LONG` (for UPTREND) or `ENTER_SHORT` (for DOWNTREND).
+6. If you reject a setup as `NO_TRADE`, your `confluence_score` MUST be strictly below {min_score}.
 
 ## YOUR 5-STEP AUDIT CHECKLIST
 You must evaluate each step and assign PASS or FAIL:
@@ -127,9 +189,9 @@ STEP 3 — 15m CLOSED CANDLE TRIGGER
   FAIL: Doji, indecision, or candle is against the 1H trend direction.
 
 STEP 4 — MATH CONFIRMATION (NEVER RECALCULATE)
-  PASS: Python-confirmed R:R ≥ 2.0, risk ≤ 1% of account, stop-loss is
+  PASS: Python-confirmed R:R ≥ {min_rr:.1f}, risk ≤ 1% of account, stop-loss is
         logically placed outside the zone with ATR buffer.
-  FAIL: R:R < 2.0, risk > 1%, or the Python gate already failed.
+  FAIL: R:R < {min_rr:.1f}, risk > 1%, or the Python gate already failed.
 
 STEP 5 — VOLATILITY & NEWS SPIKE CHECK
   PASS: ATR looks normal (not spiking 2x+ vs typical range). Price action
@@ -147,23 +209,27 @@ Assign points fairly:
   - 15m Candle trigger quality:      0–25 pts
   - Clean path to target + R:R math: 0–25 pts
 
-Score < 80 → decision MUST be `NO_TRADE`.
+CRITICAL SCORING & DECISION RULES:
+- "confluence_score" MUST be an integer in digits (0–100), NEVER a word like "fifty" or "sixty".
+- If confluence_score >= {min_score} and the setup aligns with trend_1h, decision MUST be `ENTER_LONG` (for UPTREND) or `ENTER_SHORT` (for DOWNTREND).
+- If you reject a setup as `NO_TRADE`, your confluence_score MUST be strictly below {min_score}.
+- Score < {min_score} → decision MUST be `NO_TRADE`.
 
 ## OUTPUT FORMAT — STRICT JSON
 Return ONLY valid JSON matching this exact schema:
-{
+{{
   "decision": "ENTER_LONG" | "ENTER_SHORT" | "NO_TRADE",
-  "confluence_score": <integer 0-100>,
+  "confluence_score": <integer in digits 0-100, NEVER words>,
   "trend_1h": "<trend string from Python data>",
-  "checklist_audit": {
-    "step1_trend":        {"result": "PASS"|"FAIL", "reasoning": "<1 sentence>"},
-    "step2_zone_fib":     {"result": "PASS"|"FAIL", "reasoning": "<1 sentence>"},
-    "step3_candle":       {"result": "PASS"|"FAIL", "reasoning": "<1 sentence>"},
-    "step4_math":         {"result": "PASS"|"FAIL", "reasoning": "<1 sentence>"},
-    "step5_volatility":   {"result": "PASS"|"FAIL", "reasoning": "<1 sentence>"}
-  },
+  "checklist_audit": {{
+    "step1_trend":        {{"result": "PASS"|"FAIL", "reasoning": "<1 sentence>"}},
+    "step2_zone_fib":     {{"result": "PASS"|"FAIL", "reasoning": "<1 sentence>"}},
+    "step3_candle":       {{"result": "PASS"|"FAIL", "reasoning": "<1 sentence>"}},
+    "step4_math":         {{"result": "PASS"|"FAIL", "reasoning": "<1 sentence>"}},
+    "step5_volatility":   {{"result": "PASS"|"FAIL", "reasoning": "<1 sentence>"}}
+  }},
   "devils_advocate_risks": ["<risk 1>", "<risk 2>"],
-  "trade_plan": {
+  "trade_plan": {{
     "direction":    "<LONG|SHORT|NONE>",
     "entry":        <float|null>,
     "stop_loss":    <float|null>,
@@ -171,11 +237,12 @@ Return ONLY valid JSON matching this exact schema:
     "risk_reward":  <float|null>,
     "risk_usd":     <float|null>,
     "lots":         <float|null>
-  },
+  }},
   "plain_english_summary": "<2–4 clear sentences a beginner can understand>"
-}
-""".strip().replace("$500 account", f"${config.ACCOUNT_BALANCE:.0f} account")
+}}
+""".strip()
 
+_BASE_SYSTEM_PROMPT = _build_base_system_prompt()
 _SYSTEM_PROMPT = _BASE_SYSTEM_PROMPT
 
 
@@ -199,17 +266,8 @@ def _build_system_prompt() -> str:
       1. WINNING SIGNATURES TO PRIORITIZE (Winning DNA from pattern_stats)
       2. PAST LOSS LESSONS TO AVOID (from lessons_learned.json)
     """
-    min_score = getattr(config, "get_min_confluence_score", lambda: config.MIN_CONFLUENCE_SCORE)()
-    prompt = _BASE_SYSTEM_PROMPT.replace(
-        "$500 account",
-        f"${config.ACCOUNT_BALANCE:.0f} account"
-    ).replace(
-        "Any Confluence Score below 80 MUST produce `NO_TRADE`.",
-        f"Any Confluence Score below {min_score} MUST produce `NO_TRADE`."
-    ).replace(
-        "Score < 80 → decision MUST be `NO_TRADE`.",
-        f"Score < {min_score} → decision MUST be `NO_TRADE`."
-    )
+    min_score = config.get_min_confluence_score() if hasattr(config, "get_min_confluence_score") else config.MIN_CONFLUENCE_SCORE
+    prompt = _build_base_system_prompt()
 
     sections = []
 
@@ -598,10 +656,16 @@ def _validate_response(ai_json: dict, math_result: dict[str, Any]) -> dict[str, 
     """
     Validate the AI response and enforce hard rules.
 
-    Rules enforced here (belt-and-suspenders, in case AI ignores system prompt):
-      - Confluence score < dynamic MIN_CONFLUENCE_SCORE (65 in Demo Discovery, 80 in Live) → force NO_TRADE.
-      - If Python gate failed → force NO_TRADE.
-      - If decision not in allowed values → force NO_TRADE.
+    Rules enforced here:
+      - Parse confluence_score safely (handle ints, floats, numeric strings, English number words).
+      - Enforce bidirectional consistency:
+          * If score < min_score: force decision = "NO_TRADE".
+          * If score >= min_score AND math_result passed AND decision == "NO_TRADE":
+            check checklist_audit — if step1_trend and step4_math are "PASS",
+            automatically align decision to "ENTER_LONG" (for UPTREND) or "ENTER_SHORT" (for DOWNTREND)
+            and populate trade_plan from math_result so actionable >= min_score setups
+            always send Accept/Decline buttons.
+          * If rejected as "NO_TRADE", ensure confluence_score is strictly below min_score.
     """
     # Normalize aliases so both naming conventions are always available
     if "checklist_audit" in ai_json and "checklist" not in ai_json:
@@ -620,23 +684,74 @@ def _validate_response(ai_json: dict, math_result: dict[str, Any]) -> dict[str, 
         ai_json["plain_english_summary"] = ai_json["summary"]
 
     allowed_decisions = {"ENTER_LONG", "ENTER_SHORT", "NO_TRADE"}
-
     if ai_json.get("decision") not in allowed_decisions:
         ai_json["decision"] = "NO_TRADE"
         ai_json["_override"] = "Invalid decision value — forced to NO_TRADE."
 
-    min_score = getattr(config, "get_min_confluence_score", lambda: config.MIN_CONFLUENCE_SCORE)()
-    score = int(ai_json.get("confluence_score", 0))
+    min_score = config.get_min_confluence_score() if hasattr(config, "get_min_confluence_score") else config.MIN_CONFLUENCE_SCORE
+    score = _parse_score(ai_json.get("confluence_score", 0))
+    ai_json["confluence_score"] = score
+
+    math_gate_passed = bool(math_result.get("passed_math_gate", False))
+
+    if not math_gate_passed:
+        ai_json["decision"] = "NO_TRADE"
+        reasons = math_result.get("fail_reasons", ["Math gate failed."])
+        ai_json["_override"] = f"Python math gate failed: {'; '.join(reasons)}"
+        if score >= min_score:
+            score = max(0, min_score - 1)
+            ai_json["confluence_score"] = score
+
+    # Enforce bidirectional consistency
     if score < min_score:
         ai_json["decision"] = "NO_TRADE"
         ai_json["_override"] = (
             f"Confluence score {score} < minimum {min_score} — forced to NO_TRADE."
         )
+    elif math_gate_passed and ai_json.get("decision") == "NO_TRADE":
+        checklist = ai_json.get("checklist_audit") or ai_json.get("checklist") or {}
 
-    if not math_result.get("passed_math_gate", False):
-        ai_json["decision"] = "NO_TRADE"
-        reasons = math_result.get("fail_reasons", ["Math gate failed."])
-        ai_json["_override"] = f"Python math gate failed: {'; '.join(reasons)}"
+        def _is_step_pass(step_val: Any) -> bool:
+            if isinstance(step_val, dict):
+                return str(step_val.get("result", "")).strip().upper() == "PASS"
+            if isinstance(step_val, str):
+                return step_val.strip().upper() == "PASS"
+            return False
+
+        step1_pass = _is_step_pass(checklist.get("step1_trend"))
+        step4_pass = _is_step_pass(checklist.get("step4_math"))
+
+        trend_1h = str(math_result.get("trend_1h") or ai_json.get("trend_1h", "")).strip().upper()
+
+        if step1_pass and step4_pass:
+            if trend_1h == "UPTREND":
+                ai_json["decision"] = "ENTER_LONG"
+            elif trend_1h == "DOWNTREND":
+                ai_json["decision"] = "ENTER_SHORT"
+
+        if ai_json.get("decision") in ("ENTER_LONG", "ENTER_SHORT"):
+            ai_json["_override"] = (
+                f"Confluence score {score} >= {min_score} with PASS on trend and math — aligned to {ai_json['decision']}."
+            )
+            # Populate trade_plan from math_result so actionable >= min_score setups always send Accept/Decline buttons
+            tp = ai_json.setdefault("trade_plan", {})
+            if not isinstance(tp, dict):
+                tp = {}
+                ai_json["trade_plan"] = tp
+
+            direction = "LONG" if ai_json["decision"] == "ENTER_LONG" else "SHORT"
+            tp["direction"] = direction
+            tp["entry"] = tp.get("entry") or math_result.get("entry_price")
+            tp["stop_loss"] = tp.get("stop_loss") or math_result.get("stop_loss")
+            tp["take_profit"] = tp.get("take_profit") or math_result.get("take_profit")
+            tp["risk_reward"] = tp.get("risk_reward") or math_result.get("risk_reward_ratio")
+            tp["risk_usd"] = tp.get("risk_usd") or math_result.get("max_risk_usd")
+            tp["lots"] = tp.get("lots") or math_result.get("position_size_lots")
+        else:
+            # Setup was rejected as NO_TRADE: confluence_score must be strictly below min_score
+            if score >= min_score:
+                score = max(0, min_score - 1)
+                ai_json["confluence_score"] = score
 
     news = math_result.get("_news_data", {})
     ai_json["news_bias"] = news.get("news_bias", "NEUTRAL")

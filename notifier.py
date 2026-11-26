@@ -170,6 +170,9 @@ def send_alert(
         else:
             _print_console(card)
     else:
+        # Plain NO_TRADE: send alert only if NOTIFY_NO_TRADE is explicitly enabled
+        if not getattr(config, "NOTIFY_NO_TRADE", False):
+            return
         card = _format_card(symbol, math_result, ai_result, signal_id=None)
         if config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID:
             _send_telegram(card)
