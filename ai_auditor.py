@@ -1,20 +1,21 @@
 """
-ai_auditor.py — Gate 3: Strict Gemini AI Risk Manager
+ai_auditor.py — Gate 3: Multi-Provider AI Risk Manager (Groq -> OpenRouter -> Gemini)
 
-Receives the JSON analysis from market_math.py and asks Gemini to act
+Receives the JSON analysis from market_math.py and asks the AI auditor to act
 as a strict risk auditor. The AI default is ALWAYS NO_TRADE.
 
 Design principles:
   - Python math is already done and trusted. The AI only reasons.
   - System prompt enforces a 5-step checklist + Devil's Advocate check.
   - Confluence Score < 80 → MUST output NO_TRADE.
-  - Response is strict JSON enforced by response_mime_type + response_schema
-    (Pydantic model passed to the google-genai SDK). JSON parsing never fails.
-  - If the Gemini API call fails, we fail safe: return NO_TRADE.
+  - Multi-tier provider priority: GroqCloud (Primary) -> OpenRouter (Secondary) -> Gemini (Last Resort).
+  - Clean error formatting ensures zero raw nested dict dumps into notifications.
+  - If all AI calls fail, fail-safe returns NO_TRADE (enabling math-approved plan if math passed).
 """
 
 import json
 import os
+import re
 import time
 from typing import Any
 
@@ -252,9 +253,52 @@ def _build_system_prompt() -> str:
 # Public entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _extract_status_code(err: Exception) -> int | None:
+    """Extract HTTP status code from an exception if present."""
+    if hasattr(err, "response") and getattr(err.response, "status_code", None):
+        return err.response.status_code
+    if hasattr(err, "status_code") and isinstance(err.status_code, int):
+        return err.status_code
+    if hasattr(err, "code") and isinstance(err.code, int):
+        return err.code
+    match = re.search(r"\b([45]\d\d)\b", str(err))
+    if match:
+        return int(match.group(1))
+    return None
+
+
+def _format_error(provider: str, model: str, status_or_err: Any) -> str:
+    """Format provider errors concisely (f'{provider}/{model}: HTTP {status}')."""
+    prefix = f"{provider}/{model}" if model else provider
+    if isinstance(status_or_err, int):
+        return f"{prefix}: HTTP {status_or_err}"
+
+    if isinstance(status_or_err, Exception):
+        status = _extract_status_code(status_or_err)
+        if status:
+            return f"{prefix}: HTTP {status}"
+        err_str = str(status_or_err)
+        if (
+            isinstance(status_or_err, (requests.Timeout, TimeoutError))
+            or "TIMEOUT" in err_str.upper()
+            or "DEADLINE" in err_str.upper()
+        ):
+            return f"{prefix}: Timeout"
+        if isinstance(status_or_err, (requests.ConnectionError, ConnectionError)):
+            return f"{prefix}: Connection Error"
+        if isinstance(status_or_err, json.JSONDecodeError):
+            return f"{prefix}: Invalid JSON"
+        if isinstance(status_or_err, ValueError):
+            return f"{prefix}: {err_str[:60]}"
+        return f"{prefix}: {type(status_or_err).__name__}"
+
+    return f"{prefix}: {str(status_or_err)[:60]}"
+
+
 def audit(math_result: dict[str, Any]) -> dict[str, Any]:
     """
-    Send the Gate 2 math result to Gemini for risk audit.
+    Send the Gate 2 math result to AI for risk audit.
+    Provider priority: GroqCloud (Tier 1) -> OpenRouter (Tier 2) -> Gemini (Tier 3).
 
     Args:
         math_result: The dict returned by market_math.analyse().
@@ -262,206 +306,218 @@ def audit(math_result: dict[str, Any]) -> dict[str, Any]:
     Returns:
         Validated JSON dict. Falls back to safe NO_TRADE on any error.
     """
-    if not _GENAI_AVAILABLE:
-        return _fail_safe("google-genai package not installed. Run: pip install google-genai", math_result=math_result)
-
-    if not config.GEMINI_API_KEY:
-        return _fail_safe("GEMINI_API_KEY not set in .env — cannot call AI auditor.", math_result=math_result)
-
-    user_prompt = _build_user_prompt(math_result)
-
     try:
-        http_opts = (
-            types.HttpOptions(timeout=15000, retry_options=types.HttpRetryOptions(attempts=1))
-            if hasattr(types, "HttpOptions") and hasattr(types, "HttpRetryOptions")
-            else None
-        )
-        client = genai.Client(api_key=config.GEMINI_API_KEY, http_options=http_opts) if http_opts else genai.Client(api_key=config.GEMINI_API_KEY)
+        system_prompt = _build_system_prompt()
+        user_prompt = _build_user_prompt(math_result)
+    except Exception as exc:  # noqa: BLE001
+        return _fail_safe(f"AI auditor initialization error: {exc}", math_result=math_result)
 
-        # Build GenerateContentConfig — strict JSON enforced by response_mime_type + response_schema
-        # max_output_tokens=8192 ensures complete JSON output without truncation.
-        gen_config_kwargs: dict[str, Any] = {
-            "system_instruction": _build_system_prompt(),
-            "response_mime_type": "application/json",
-            "temperature":        0.1,          # Low temperature = consistent, conservative outputs
-            "max_output_tokens": 8192,
-        }
-        if _PYDANTIC_AVAILABLE:
-            gen_config_kwargs["response_schema"] = AuditResponse
+    model_errors: list[str] = []
 
-        # Base models ranked by speed, low latency, and free-tier availability
-        base_models = list(dict.fromkeys([
-            config.GEMINI_MODEL,
-            "gemini-3.5-flash-lite",
-            "gemini-3.8-flash",
-            "gemma-4-31b-it",
-            "gemma-4-26b-a4b-it",
-            "gemini-4-hydrogen",
-            "gemini-3.1-flash-lite",
-            "gemini-3.7-flash",
-        ]))
-
-        # Adaptive Sticky Router: put _LAST_WORKING_MODEL first (if ready), then non-cooldown models,
-        # followed by cooling models as last resort
-        now_mono = time.monotonic()
-        active_models = [m for m in base_models if _MODEL_COOLDOWN_UNTIL.get(m, 0.0) <= now_mono]
-        cooldown_models = [m for m in base_models if _MODEL_COOLDOWN_UNTIL.get(m, 0.0) > now_mono]
-
-        global _LAST_WORKING_MODEL
-        ordered_models: list[str] = []
-        if _LAST_WORKING_MODEL and _LAST_WORKING_MODEL in active_models:
-            ordered_models.append(_LAST_WORKING_MODEL)
-        for m in active_models:
-            if m not in ordered_models:
-                ordered_models.append(m)
-        for m in cooldown_models:
-            if m not in ordered_models:
-                ordered_models.append(m)
-
-        model_errors: list[str] = []
-
-        for model_name in ordered_models:
+    # ── Tier 1: Primary — GroqCloud ──────────────────────────────────────────
+    groq_key = os.getenv("GROQ_API_KEY", "").strip() or getattr(config, "GROQ_API_KEY", "").strip()
+    if groq_key:
+        groq_models = ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]
+        for model_id in groq_models:
             try:
-                cfg_kwargs = dict(gen_config_kwargs)
-                is_gemma = model_name.startswith("gemma-")
-                if is_gemma:
-                    cfg_kwargs.pop("thinking_config", None)
-                    cfg_kwargs.pop("response_schema", None)
-                else:
-                    try:
-                        cfg_kwargs["thinking_config"] = types.ThinkingConfig(thinking_level="low")
-                    except Exception:
-                        pass
-
-                call_contents = user_prompt
-                try:
-                    response = client.models.generate_content(
-                        model=model_name,
-                        contents=call_contents,
-                        config=types.GenerateContentConfig(**cfg_kwargs),
-                    )
-                except Exception as call_err:
-                    err_str = str(call_err).upper()
-                    # 1. Gemma system_instruction fallback
-                    if is_gemma and "400" in err_str and "system_instruction" in cfg_kwargs:
-                        cfg_kwargs.pop("system_instruction", None)
-                        call_contents = f"{_build_system_prompt()}\n\n{user_prompt}"
-                        response = client.models.generate_content(
-                            model=model_name,
-                            contents=call_contents,
-                            config=types.GenerateContentConfig(**cfg_kwargs),
-                        )
-                    # 2. Strip thinking_config and response_schema on 400 / INVALID_ARGUMENT
-                    elif (
-                        "400" in err_str
-                        or "INVALID_ARGUMENT" in err_str
-                        or "INVALIDARGUMENT" in err_str
-                        or "THINKING" in err_str
-                        or "SCHEMA" in err_str
-                    ) and (
-                        "thinking_config" in cfg_kwargs or "response_schema" in cfg_kwargs
-                    ):
-                        cfg_kwargs.pop("thinking_config", None)
-                        cfg_kwargs.pop("response_schema", None)
-                        response = client.models.generate_content(
-                            model=model_name,
-                            contents=call_contents,
-                            config=types.GenerateContentConfig(**cfg_kwargs),
-                        )
-                    else:
-                        raise call_err
-
-                # Response extraction & validation
-                if not response:
-                    print(f"  [ai_auditor] Warning: {model_name} returned empty response. Retrying next model...")
-                    model_errors.append(f"{model_name}: empty response")
-                    continue
-
-                try:
-                    raw_resp = response.text
-                except Exception as text_err:
-                    print(f"  [ai_auditor] Warning: {model_name} response.text could not be read: {text_err}. Retrying next model...")
-                    model_errors.append(f"{model_name}: text unreadable ({text_err})")
-                    continue
-
-                if not raw_resp or not raw_resp.strip():
-                    print(f"  [ai_auditor] Warning: {model_name} returned empty text. Retrying next model...")
-                    model_errors.append(f"{model_name}: empty text")
-                    continue
-
-                raw_text = _clean_json_text(raw_resp)
-                if not raw_text:
-                    print(f"  [ai_auditor] Warning: {model_name} returned empty text after stripping code fences. Retrying next model...")
-                    model_errors.append(f"{model_name}: empty text after cleaning")
-                    continue
-
-                ai_json = json.loads(raw_text)
-                validated = _validate_response(ai_json, math_result)
-
-                # Sticky success: mark model as last working and clear cooldown
-                _LAST_WORKING_MODEL = model_name
-                _MODEL_COOLDOWN_UNTIL.pop(model_name, None)
-                return validated
-
-            except json.JSONDecodeError as decode_err:
-                print(f"  [ai_auditor] Warning: {model_name} returned invalid/truncated JSON: {decode_err}. Retrying next model...")
-                model_errors.append(f"{model_name}: JSONDecodeError ({decode_err})")
-                continue
-            except Exception as err:
-                err_str = str(err).upper()
-                if (
-                    "503" in err_str
-                    or "UNAVAILABLE" in err_str
-                    or "504" in err_str
-                    or "DEADLINE_EXCEEDED" in err_str
-                    or "TIMEOUT" in err_str
-                ):
-                    _MODEL_COOLDOWN_UNTIL[model_name] = time.monotonic() + 180.0
-                    print(f"  [ai_auditor] ⏱ {model_name} busy/timeout ({err}). Set on 3-min cooldown.")
-                else:
-                    print(f"  [ai_auditor] Warning: {model_name} call failed: {err}. Retrying next model...")
-                model_errors.append(f"{model_name}: {err}")
-                continue
-
-        # Fallback to Groq API if configured and all Google models failed
-        groq_api_key = os.getenv("GROQ_API_KEY", "").strip()
-        if groq_api_key:
-            try:
-                print("  [ai_auditor] All Google models exhausted. Invoking Groq fallback (llama-3.3-70b-versatile)...")
-                groq_resp = requests.post(
+                resp = requests.post(
                     "https://api.groq.com/openai/v1/chat/completions",
                     headers={
-                        "Authorization": f"Bearer {groq_api_key}",
+                        "Authorization": f"Bearer {groq_key}",
                         "Content-Type": "application/json",
                     },
                     json={
-                        "model": "llama-3.3-70b-versatile",
+                        "model": model_id,
+                        "temperature": 0.1,
+                        "max_tokens": 1200,
+                        "reasoning_effort": "low",
+                        "response_format": {"type": "json_object"},
                         "messages": [
-                            {"role": "system", "content": _build_system_prompt()},
+                            {"role": "system", "content": system_prompt},
                             {"role": "user", "content": user_prompt},
                         ],
-                        "response_format": {"type": "json_object"},
-                        "temperature": 0.1,
-                        "max_tokens": 4096,
                     },
-                    timeout=15,
+                    timeout=(5, 25),
                 )
-                if groq_resp.status_code == 200:
-                    groq_data = groq_resp.json()
-                    raw_text = groq_data["choices"][0]["message"]["content"]
-                    ai_json = json.loads(_clean_json_text(raw_text))
-                    print("  [ai_auditor] ✅ Groq fallback succeeded.")
-                    return _validate_response(ai_json, math_result)
+                if resp.status_code != 200:
+                    err_msg = _format_error("groq", model_id, resp.status_code)
+                    print(f"  [ai_auditor] Warning: Groq ({model_id}) returned HTTP {resp.status_code}")
+                    model_errors.append(err_msg)
+                    continue
+
+                data = resp.json()
+                choices = data.get("choices")
+                if not choices:
+                    raise ValueError("No choices in response")
+                content = choices[0].get("message", {}).get("content", "")
+                if not content or not content.strip():
+                    raise ValueError("Empty content returned")
+
+                raw_text = _clean_json_text(content)
+                if not raw_text:
+                    raise ValueError("Empty content returned")
+
+                ai_json = json.loads(raw_text)
+                result = _validate_response(ai_json, math_result)
+                result["model_used"] = f"groq/{model_id}"
+                print(f"  [ai_auditor] ✅ Audited via Groq ({model_id})")
+                return result
+
+            except Exception as err:
+                err_msg = _format_error("groq", model_id, err)
+                print(f"  [ai_auditor] Warning: Groq ({model_id}) failed: {err_msg}")
+                model_errors.append(err_msg)
+                continue
+    else:
+        model_errors.append("groq: GROQ_API_KEY not set")
+
+    # ── Tier 2: Secondary — OpenRouter ───────────────────────────────────────
+    or_key = os.getenv("OPENROUTER_API_KEY", "").strip() or getattr(config, "OPENROUTER_API_KEY", "").strip()
+    if or_key:
+        openrouter_models = ["nvidia/nemotron-3-ultra-550b-a55b:free", "openrouter/free"]
+        for model_id in openrouter_models:
+            try:
+                resp = requests.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {or_key}",
+                        "Content-Type": "application/json",
+                        "X-Title": "VanguardFX Auditor",
+                    },
+                    json={
+                        "model": model_id,
+                        "temperature": 0.1,
+                        "max_tokens": 1200,
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt},
+                        ],
+                    },
+                    timeout=(5, 25),
+                )
+                if resp.status_code != 200:
+                    err_msg = _format_error("openrouter", model_id, resp.status_code)
+                    print(f"  [ai_auditor] Warning: OpenRouter ({model_id}) returned HTTP {resp.status_code}")
+                    model_errors.append(err_msg)
+                    continue
+
+                data = resp.json()
+                choices = data.get("choices")
+                if not choices:
+                    raise ValueError("No choices in response")
+                content = choices[0].get("message", {}).get("content", "")
+                if not content or not content.strip():
+                    raise ValueError("Empty content returned")
+
+                raw_text = _clean_json_text(content)
+                if not raw_text:
+                    raise ValueError("Empty content returned")
+
+                ai_json = json.loads(raw_text)
+                result = _validate_response(ai_json, math_result)
+                result["model_used"] = f"openrouter/{model_id}"
+                print(f"  [ai_auditor] ✅ Audited via OpenRouter ({model_id})")
+                return result
+
+            except Exception as err:
+                err_msg = _format_error("openrouter", model_id, err)
+                print(f"  [ai_auditor] Warning: OpenRouter ({model_id}) failed: {err_msg}")
+                model_errors.append(err_msg)
+                continue
+    else:
+        model_errors.append("openrouter: OPENROUTER_API_KEY not set")
+
+    # ── Tier 3: Last Resort — Gemini ─────────────────────────────────────────
+    gemini_model = "gemini-3.5-flash-lite"
+    gemini_key = getattr(config, "GEMINI_API_KEY", "") or os.getenv("GEMINI_API_KEY", "").strip()
+
+    if not _GENAI_AVAILABLE:
+        model_errors.append(f"gemini/{gemini_model}: google-genai not installed")
+    elif not gemini_key:
+        model_errors.append(f"gemini/{gemini_model}: GEMINI_API_KEY not set")
+    else:
+        try:
+            http_opts = (
+                types.HttpOptions(timeout=15000, retry_options=types.HttpRetryOptions(attempts=1))
+                if hasattr(types, "HttpOptions") and hasattr(types, "HttpRetryOptions")
+                else None
+            )
+            client = (
+                genai.Client(api_key=gemini_key, http_options=http_opts)
+                if http_opts
+                else genai.Client(api_key=gemini_key)
+            )
+
+            gen_config_kwargs: dict[str, Any] = {
+                "system_instruction": system_prompt,
+                "response_mime_type": "application/json",
+                "temperature":        0.1,
+                "max_output_tokens": 8192,
+            }
+            if _PYDANTIC_AVAILABLE:
+                gen_config_kwargs["response_schema"] = AuditResponse
+
+            try:
+                gen_config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_level="low")
+            except Exception:
+                pass
+
+            try:
+                response = client.models.generate_content(
+                    model=gemini_model,
+                    contents=user_prompt,
+                    config=types.GenerateContentConfig(**gen_config_kwargs),
+                )
+            except Exception as call_err:
+                err_str = str(call_err).upper()
+                if (
+                    "400" in err_str
+                    or "INVALID_ARGUMENT" in err_str
+                    or "INVALIDARGUMENT" in err_str
+                    or "THINKING" in err_str
+                    or "SCHEMA" in err_str
+                ) and (
+                    "thinking_config" in gen_config_kwargs or "response_schema" in gen_config_kwargs
+                ):
+                    gen_config_kwargs.pop("thinking_config", None)
+                    gen_config_kwargs.pop("response_schema", None)
+                    response = client.models.generate_content(
+                        model=gemini_model,
+                        contents=user_prompt,
+                        config=types.GenerateContentConfig(**gen_config_kwargs),
+                    )
                 else:
-                    model_errors.append(f"groq: HTTP {groq_resp.status_code} {groq_resp.text[:100]}")
-            except Exception as groq_err:
-                model_errors.append(f"groq: {groq_err}")
+                    raise call_err
 
-        errors_summary = " | ".join(model_errors) if model_errors else "No models executed"
-        return _fail_safe(f"All AI models exhausted. Errors: {errors_summary}", math_result=math_result)
+            if not response:
+                raise ValueError("Empty response returned")
 
-    except Exception as exc:  # noqa: BLE001
-        return _fail_safe(f"Gemini API initialization error: {exc}", math_result=math_result)
+            try:
+                raw_resp = response.text
+            except Exception as text_err:
+                raise ValueError(f"text unreadable ({text_err})")
+
+            if not raw_resp or not raw_resp.strip():
+                raise ValueError("Empty text returned")
+
+            raw_text = _clean_json_text(raw_resp)
+            if not raw_text:
+                raise ValueError("Empty content returned")
+
+            ai_json = json.loads(raw_text)
+            result = _validate_response(ai_json, math_result)
+            result["model_used"] = f"gemini/{gemini_model}"
+            print(f"  [ai_auditor] ✅ Audited via Gemini ({gemini_model})")
+            return result
+
+        except Exception as err:
+            err_msg = _format_error("gemini", gemini_model, err)
+            print(f"  [ai_auditor] Warning: Gemini ({gemini_model}) failed: {err_msg}")
+            model_errors.append(err_msg)
+
+    # ── All Three Tiers Failed ───────────────────────────────────────────────
+    errors_summary = " | ".join(model_errors) if model_errors else "All AI providers exhausted"
+    return _fail_safe(f"All AI models exhausted. Errors: {errors_summary}", math_result=math_result)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -474,6 +530,15 @@ def _clean_json_text(text: str) -> str:
     so json.loads() receives clean JSON.
     """
     raw = text.strip()
+    if "```" in raw:
+        start_fence = raw.find("```")
+        end_fence = raw.rfind("```")
+        if start_fence != -1 and end_fence != -1 and end_fence > start_fence:
+            inner = raw[start_fence:end_fence]
+            first_nl = inner.find("\n")
+            if first_nl != -1:
+                return inner[first_nl + 1:].strip()
+            return inner.lstrip("`").strip()
     if raw.startswith("```"):
         first_newline = raw.find("\n")
         if first_newline != -1:
