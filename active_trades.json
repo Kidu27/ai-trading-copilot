@@ -67,5 +67,28 @@
     "opened_eat": "2026-11-26 12:31:47",
     "closed_eat": null,
     "pnl_usd": null
+  },
+  "8eca31f3-76d4-4cb8-b62d-e22ad879fa30": {
+    "signal_id": "8eca31f3-76d4-4cb8-b62d-e22ad879fa30",
+    "pair": "EUR/USD",
+    "direction": "ENTER_LONG",
+    "entry_price": 1.09767,
+    "entry": 1.09767,
+    "fill_price": 1.09767,
+    "stop_loss": 1.09661,
+    "take_profit": 1.1,
+    "risk_usd": 9.54,
+    "risk_reward": 2.2,
+    "standard_lots": 0.09,
+    "units": 9000,
+    "mt5_ticket": "MANUAL_ENTRY",
+    "source": "MANUAL_MT5",
+    "status": "OPEN",
+    "executor": "manual",
+    "demo_mode": true,
+    "timestamp_eat": "2026-11-26 13:45:12",
+    "opened_eat": "2026-11-26 13:49:14",
+    "closed_eat": null,
+    "pnl_usd": null
   }
 }
