@@ -1194,5 +1194,43 @@
     "outcome": "SHADOW_PENDING",
     "pnl_usd": 0.0,
     "is_shadow_candidate": true
+  },
+  "3d7a8193-0648-4cf5-9dca-d283cd1d9c24": {
+    "signal_id": "3d7a8193-0648-4cf5-9dca-d283cd1d9c24",
+    "timestamp_eat": "2026-11-26 14:00:14",
+    "pair": "USD/JPY",
+    "direction": "ENTER_LONG",
+    "rsi_14_15m": 63.8,
+    "ema_signal": "BULLISH",
+    "ema_gap_pips": 2.4,
+    "atr_15m": 0.05768,
+    "in_fib_golden_zone": false,
+    "candle_pattern": "NEUTRAL",
+    "body_pct": 0.618,
+    "news_bias": "NEUTRAL",
+    "confluence_score": 90,
+    "session_tag": "LONDON_OPEN",
+    "outcome": "PENDING",
+    "pnl_usd": 0.0,
+    "is_shadow_candidate": false
+  },
+  "5e31de21-2d82-4504-813f-4de0616172cb": {
+    "signal_id": "5e31de21-2d82-4504-813f-4de0616172cb",
+    "timestamp_eat": "2026-11-26 14:00:54",
+    "pair": "GBP/AUD",
+    "direction": "SHADOW_LONG",
+    "rsi_14_15m": 64.4,
+    "ema_signal": "BULLISH",
+    "ema_gap_pips": 59.9,
+    "atr_15m": 0.00141,
+    "in_fib_golden_zone": true,
+    "candle_pattern": "NEUTRAL",
+    "body_pct": 0.271,
+    "news_bias": "NEUTRAL",
+    "confluence_score": 50,
+    "session_tag": "LONDON_OPEN",
+    "outcome": "SHADOW_PENDING",
+    "pnl_usd": 0.0,
+    "is_shadow_candidate": true
   }
 }
