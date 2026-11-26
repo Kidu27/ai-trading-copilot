@@ -505,3 +505,4 @@ timestamp_eat,signal_id,pair,decision,confluence_score,entry_price,stop_loss,tak
 2026-11-26 12:31:14,f3393b21-5fb9-4a7a-b567-1630cb144070,EUR/JPY,ENTER_LONG,80,174.74733,174.63624,174.99174,0.14,2.2,9.77,EXECUTED,,,,Manually entered on MT5 Mobile — auto-tracking SL/TP
 2026-11-26 12:31:33,9f5b1d40-3fa0-4c17-bc10-4ae62ef97783,GBP/JPY,NO_TRADE,0,,,,,,10.0,OPEN,,,,
 2026-11-26 12:31:54,fa5f3252-e062-4df5-8f34-c3f794f86839,GBP/AUD,SHADOW_LONG,50,1.9775,1.97599,1.98083,0.09,2.2,10.0,SHADOW_OPEN,,,,Shadow candidate (50/100)
+2026-11-26 12:32:15,1256dfc3-2353-4129-b1d2-32d2df3f6413,GBP/NZD,NO_TRADE,45,,,,0.09,,9.09,OPEN,,,,
