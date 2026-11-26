@@ -540,5 +540,21 @@
     "risk_reward": 2.2,
     "risk_usd": 9.13,
     "status": "EXECUTED"
+  },
+  "cfcdbb11-1108-49e3-a5e5-7d733455bd12": {
+    "signal_id": "cfcdbb11-1108-49e3-a5e5-7d733455bd12",
+    "timestamp_eat": "2026-11-26 15:30:12",
+    "timestamp_iso": "2026-11-26T15:30:12.664169+03:00",
+    "pair": "EUR/USD",
+    "direction": "ENTER_LONG",
+    "entry": 1.09717,
+    "stop_loss": 1.09573,
+    "take_profit": 1.09965,
+    "standard_lots": 0.06,
+    "units": 6000,
+    "confluence_score": 100,
+    "risk_reward": 1.72,
+    "risk_usd": 8.64,
+    "status": "WAITING_MANUAL"
   }
 }
