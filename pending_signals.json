@@ -475,7 +475,7 @@
     "confluence_score": 80,
     "risk_reward": 2.2,
     "risk_usd": 9.54,
-    "status": "PENDING"
+    "status": "WAITING_MANUAL"
   },
   "51a53bc0-4d58-459f-a8a7-de653cabc918": {
     "signal_id": "51a53bc0-4d58-459f-a8a7-de653cabc918",
