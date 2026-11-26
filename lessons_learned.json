@@ -5,5 +5,19 @@
     "outcome": "LOSS",
     "actionable_lesson": "Always validate that entry and stop-loss parameters align directly with current live 15-minute market structure prior to order execution.",
     "root_cause": "Price hit the stop-loss instantly because the entry order at 1.0850 was placed far below the active market price structure trading around 1.1180."
+  },
+  {
+    "timestamp_eat": "2026-11-26 08:45:00",
+    "pair": "GBP/NZD",
+    "outcome": "LOSS",
+    "actionable_lesson": "Always require a confirmed 15m bullish engulfing candle or strong rejection wick at the Fibonacci Golden Zone before executing long entries.",
+    "root_cause": "The trade resulted in a loss because the downward momentum continued and breached the stop-loss level at 2.39241 before any upward continuation could materialize."
+  },
+  {
+    "timestamp_eat": "2026-11-26 08:30:00",
+    "pair": "EUR/USD",
+    "outcome": "LOSS",
+    "actionable_lesson": "Always verify that the 15m closed candle aggressively rejects the S/R zone before entry, and strictly enforce the volatility filter during major liquidity overlap sessions to avoid momentum breakouts.",
+    "root_cause": "Price broke above the entry zone during high volatility around 17:00, hitting the stop-loss due to persistent bullish momentum bypassing our short bias."
   }
 ]
