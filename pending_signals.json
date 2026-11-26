@@ -460,5 +460,53 @@
     "risk_reward": 2.2,
     "risk_usd": 9.09,
     "status": "PENDING"
+  },
+  "8eca31f3-76d4-4cb8-b62d-e22ad879fa30": {
+    "signal_id": "8eca31f3-76d4-4cb8-b62d-e22ad879fa30",
+    "timestamp_eat": "2026-11-26 13:45:12",
+    "timestamp_iso": "2026-11-26T13:45:12.097377+03:00",
+    "pair": "EUR/USD",
+    "direction": "ENTER_LONG",
+    "entry": 1.09767,
+    "stop_loss": 1.09661,
+    "take_profit": 1.1,
+    "standard_lots": 0.09,
+    "units": 9000,
+    "confluence_score": 80,
+    "risk_reward": 2.2,
+    "risk_usd": 9.54,
+    "status": "PENDING"
+  },
+  "51a53bc0-4d58-459f-a8a7-de653cabc918": {
+    "signal_id": "51a53bc0-4d58-459f-a8a7-de653cabc918",
+    "timestamp_eat": "2026-11-26 13:45:33",
+    "timestamp_iso": "2026-11-26T13:45:33.736916+03:00",
+    "pair": "GBP/USD",
+    "direction": "ENTER_LONG",
+    "entry": 1.3114,
+    "stop_loss": 1.30914,
+    "take_profit": 1.31465,
+    "standard_lots": 0.04,
+    "units": 4000,
+    "confluence_score": 80,
+    "risk_reward": 1.44,
+    "risk_usd": 9.06,
+    "status": "PENDING"
+  },
+  "9f0c288e-c974-41dc-9c81-6c6047268c58": {
+    "signal_id": "9f0c288e-c974-41dc-9c81-6c6047268c58",
+    "timestamp_eat": "2026-11-26 13:46:17",
+    "timestamp_iso": "2026-11-26T13:46:17.232028+03:00",
+    "pair": "EUR/JPY",
+    "direction": "ENTER_LONG",
+    "entry": 174.85983,
+    "stop_loss": 174.74608,
+    "take_profit": 175.11008,
+    "standard_lots": 0.14,
+    "units": 14000,
+    "confluence_score": 90,
+    "risk_reward": 2.2,
+    "risk_usd": 10.0,
+    "status": "PENDING"
   }
 }
