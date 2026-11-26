@@ -136,5 +136,28 @@
     "opened_eat": "2026-11-26 14:01:37",
     "closed_eat": null,
     "pnl_usd": null
+  },
+  "b4a6e9a3-b738-43a0-b5a7-d132628f9231": {
+    "signal_id": "b4a6e9a3-b738-43a0-b5a7-d132628f9231",
+    "pair": "GBP/NZD",
+    "direction": "ENTER_SHORT",
+    "entry_price": 2.39165,
+    "entry": 2.39165,
+    "fill_price": 2.39165,
+    "stop_loss": 2.3935,
+    "take_profit": 2.38758,
+    "risk_usd": 9.13,
+    "risk_reward": 2.2,
+    "standard_lots": 0.09,
+    "units": 9000,
+    "mt5_ticket": "MANUAL_ENTRY",
+    "source": "MANUAL_MT5",
+    "status": "OPEN",
+    "executor": "manual",
+    "demo_mode": true,
+    "timestamp_eat": "2026-11-26 14:45:51",
+    "opened_eat": "2026-11-26 14:46:33",
+    "closed_eat": null,
+    "pnl_usd": null
   }
 }
