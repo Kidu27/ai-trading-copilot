@@ -700,5 +700,24 @@
     "outcome": "SHADOW_LOSS",
     "pnl_usd": -9.78,
     "is_shadow_candidate": false
+  },
+  "01454359-9b2f-4e9f-979b-243b62f54d98": {
+    "signal_id": "01454359-9b2f-4e9f-979b-243b62f54d98",
+    "timestamp_eat": "2026-11-26 10:45:12",
+    "pair": "EUR/USD",
+    "direction": "ENTER_LONG",
+    "rsi_14_15m": 59.4,
+    "ema_signal": "BEARISH",
+    "ema_gap_pips": 9.2,
+    "atr_15m": 0.00036,
+    "in_fib_golden_zone": false,
+    "candle_pattern": "STRONG_BULLISH_MARUBOZU",
+    "body_pct": 0.742,
+    "news_bias": "NEUTRAL",
+    "confluence_score": 95,
+    "session_tag": "LONDON_OPEN",
+    "outcome": "PENDING",
+    "pnl_usd": 0.0,
+    "is_shadow_candidate": false
   }
 }
