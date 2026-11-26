@@ -508,5 +508,21 @@
     "risk_reward": 2.2,
     "risk_usd": 10.0,
     "status": "EXECUTED"
+  },
+  "3d7a8193-0648-4cf5-9dca-d283cd1d9c24": {
+    "signal_id": "3d7a8193-0648-4cf5-9dca-d283cd1d9c24",
+    "timestamp_eat": "2026-11-26 14:00:14",
+    "timestamp_iso": "2026-11-26T14:00:14.846976+03:00",
+    "pair": "USD/JPY",
+    "direction": "ENTER_LONG",
+    "entry": 159.29483,
+    "stop_loss": 159.13944,
+    "take_profit": 159.63668,
+    "standard_lots": 0.1,
+    "units": 10000,
+    "confluence_score": 90,
+    "risk_reward": 2.2,
+    "risk_usd": 9.75,
+    "status": "WAITING_MANUAL"
   }
 }
