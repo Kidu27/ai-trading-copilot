@@ -411,6 +411,6 @@
     "confluence_score": 78,
     "risk_reward": 2.2,
     "risk_usd": 9.86,
-    "status": "PENDING"
+    "status": "WAITING_MANUAL"
   }
 }
