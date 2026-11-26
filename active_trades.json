@@ -21,5 +21,28 @@
     "opened_eat": "2026-11-26 10:48:12",
     "closed_eat": null,
     "pnl_usd": null
+  },
+  "5c6eabf4-3363-451a-8c66-1b5566f8142f": {
+    "signal_id": "5c6eabf4-3363-451a-8c66-1b5566f8142f",
+    "pair": "EUR/JPY",
+    "direction": "ENTER_LONG",
+    "entry_price": 174.71755,
+    "entry": 174.71755,
+    "fill_price": 174.71755,
+    "stop_loss": 174.46275,
+    "take_profit": 175.1726,
+    "risk_usd": 9.6,
+    "risk_reward": 1.79,
+    "standard_lots": 0.06,
+    "units": 6000,
+    "mt5_ticket": "MANUAL_ENTRY",
+    "source": "MANUAL_MT5",
+    "status": "OPEN",
+    "executor": "manual",
+    "demo_mode": true,
+    "timestamp_eat": "2026-11-26 10:46:13",
+    "opened_eat": "2026-11-26 10:48:55",
+    "closed_eat": null,
+    "pnl_usd": null
   }
 }
