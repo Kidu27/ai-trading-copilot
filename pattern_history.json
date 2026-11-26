@@ -1954,5 +1954,24 @@
     "outcome": "PENDING",
     "pnl_usd": 0.0,
     "is_shadow_candidate": false
+  },
+  "8bcbf93b-5200-41fc-aaa3-e20d02b1a34c": {
+    "signal_id": "8bcbf93b-5200-41fc-aaa3-e20d02b1a34c",
+    "timestamp_eat": "2026-11-26 17:45:49",
+    "pair": "USD/JPY",
+    "direction": "SHADOW_LONG",
+    "rsi_14_15m": 43.8,
+    "ema_signal": "BULLISH",
+    "ema_gap_pips": 3.6,
+    "atr_15m": 0.04347,
+    "in_fib_golden_zone": false,
+    "candle_pattern": "NEUTRAL",
+    "body_pct": 0.169,
+    "news_bias": "NEUTRAL",
+    "confluence_score": 60,
+    "session_tag": "LONDON_NY_OVERLAP",
+    "outcome": "SHADOW_PENDING",
+    "pnl_usd": 0.0,
+    "is_shadow_candidate": true
   }
 }
