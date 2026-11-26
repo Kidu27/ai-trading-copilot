@@ -1039,8 +1039,8 @@
     "news_bias": "NEUTRAL",
     "confluence_score": 55,
     "session_tag": "LONDON_OPEN",
-    "outcome": "SHADOW_PENDING",
-    "pnl_usd": 0.0,
+    "outcome": "SHADOW_LOSS",
+    "pnl_usd": -10.0,
     "is_shadow_candidate": true
   },
   "cfa8de4a-77d6-4109-be3d-2762f3ac7d19": {
@@ -1248,8 +1248,8 @@
     "news_bias": "NEUTRAL",
     "confluence_score": 50,
     "session_tag": "LONDON_OPEN",
-    "outcome": "SHADOW_PENDING",
-    "pnl_usd": 0.0,
+    "outcome": "SHADOW_LOSS",
+    "pnl_usd": -10.0,
     "is_shadow_candidate": true
   },
   "ace9f59a-18e1-4e14-937b-aeb939f2f907": {
@@ -1875,8 +1875,8 @@
     "news_bias": "NEUTRAL",
     "confluence_score": 85,
     "session_tag": "LONDON_NY_OVERLAP",
-    "outcome": "PENDING",
-    "pnl_usd": 0.0,
+    "outcome": "LOSS",
+    "pnl_usd": -9.55,
     "is_shadow_candidate": false
   },
   "61f4a3cc-c1f9-4d16-8759-0e8cbc7fd22a": {
@@ -1969,6 +1969,25 @@
     "body_pct": 0.169,
     "news_bias": "NEUTRAL",
     "confluence_score": 60,
+    "session_tag": "LONDON_NY_OVERLAP",
+    "outcome": "SHADOW_PENDING",
+    "pnl_usd": 0.0,
+    "is_shadow_candidate": true
+  },
+  "1b295d81-aa40-4915-9b28-e18e17244c72": {
+    "signal_id": "1b295d81-aa40-4915-9b28-e18e17244c72",
+    "timestamp_eat": "2026-11-26 18:00:52",
+    "pair": "USD/JPY",
+    "direction": "SHADOW_LONG",
+    "rsi_14_15m": 45.7,
+    "ema_signal": "BULLISH",
+    "ema_gap_pips": 3.6,
+    "atr_15m": 0.04293,
+    "in_fib_golden_zone": false,
+    "candle_pattern": "NEUTRAL",
+    "body_pct": 0.163,
+    "news_bias": "NEUTRAL",
+    "confluence_score": 55,
     "session_tag": "LONDON_NY_OVERLAP",
     "outcome": "SHADOW_PENDING",
     "pnl_usd": 0.0,
