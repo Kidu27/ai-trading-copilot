@@ -1,26 +1,5 @@
 [
   {
-    "timestamp_eat": "2026-11-26 12:00:00",
-    "pair": "GBP/NZD",
-    "outcome": "SHADOW_LOSS",
-    "actionable_lesson": "For GBP/NZD, require a confirmed 15m closed rejection candle before entering near S/R when market volatility (ATR) is expanding.",
-    "root_cause": "Price breached Stop-Loss at 2.3919 because counter-trend volatility overwhelmed the key S/R zone on GBP/NZD."
-  },
-  {
-    "timestamp_eat": "2026-11-26 12:00:00",
-    "pair": "GBP/AUD",
-    "outcome": "LOSS",
-    "actionable_lesson": "Require a confirming 15\u2011minute close above the high of the previous candle and a minimum 10\u2011pip upward move before entering long to avoid setups that lack immediate bullish momentum.",
-    "root_cause": "The price reversed sharply after the 08:30\u202f15\u2011minute candle closed below the entry, pulling the market into the stop\u2011loss zone within two candles."
-  },
-  {
-    "timestamp_eat": "2026-11-26 13:30:00",
-    "pair": "GBP/NZD",
-    "outcome": "SHADOW_LOSS",
-    "actionable_lesson": "Require a confirming 1H lower\u2011high/lower\u2011low bias (or clear break of the 1H trend) before taking any short entry on the 15m trigger.",
-    "root_cause": "The price broke above the short entry zone and rapidly moved into the higher\u2011timeframe bullish structure, hitting the stop\u2011loss before any reversal could develop."
-  },
-  {
     "timestamp_eat": "2026-11-26 13:30:00",
     "pair": "GBP/NZD",
     "outcome": "SHADOW_LOSS",
@@ -68,5 +47,26 @@
     "outcome": "SHADOW_LOSS",
     "actionable_lesson": "Only enter a long position when the 15m candle closes above the entry price and the close is at least 0.0005 above the stop\u2011loss level to avoid immediate stop\u2011loss hits.",
     "root_cause": "The price retraced below the 1.97445 stop\u2011loss level after the 13:00\u201113:15 candle, indicating a failure of the 1H trend to sustain a higher high and a breach of the 15m support zone."
+  },
+  {
+    "timestamp_eat": "2026-11-26 17:45:00",
+    "pair": "GBP/AUD",
+    "outcome": "SHADOW_LOSS",
+    "actionable_lesson": "Require a confirming 15\u2011minute candle that closes above the high of the entry candle before entering, to avoid trades that reverse within the same session.",
+    "root_cause": "The price reversed sharply after a brief rally, breaching the entry level and sliding into the stop\u2011loss zone, likely triggered by a short\u2011term bearish pressure on the 15\u2011minute chart."
+  },
+  {
+    "timestamp_eat": "2026-11-26 17:45:00",
+    "pair": "GBP/AUD",
+    "outcome": "SHADOW_LOSS",
+    "actionable_lesson": "Require that the low of the confirming 15\u2011minute candle stays at least 5\u202fpips above the stop\u2011loss before entering a trade.",
+    "root_cause": "The price reversed sharply after the 14:45\u202f15\u2011minute candle closed below the entry, driving the market into the stop\u2011loss zone, likely due to a short\u2011term bearish pressure that wasn\u2019t filtered out."
+  },
+  {
+    "timestamp_eat": "2026-11-26 17:45:00",
+    "pair": "GBP/AUD",
+    "outcome": "LOSS",
+    "actionable_lesson": "If a 15\u2011minute candle closes below the entry price and its low breaches the stop\u2011loss level, exit the trade immediately rather than waiting for the stop to trigger.",
+    "root_cause": "A bearish 15\u2011minute candle at 14:45 produced a low that pierced the stop\u2011loss, indicating a rapid reversal that the trade couldn\u2019t survive."
   }
 ]
