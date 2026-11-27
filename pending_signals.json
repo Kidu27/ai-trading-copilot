@@ -379,7 +379,7 @@
     "confluence_score": 95,
     "risk_reward": 2.2,
     "risk_usd": 9.7,
-    "status": "EXECUTED"
+    "status": "CLOSED_LOSS"
   },
   "5c6eabf4-3363-451a-8c66-1b5566f8142f": {
     "signal_id": "5c6eabf4-3363-451a-8c66-1b5566f8142f",
