@@ -403,34 +403,39 @@ def _scan_and_notify() -> None:
     _send_telegram_text("✅ 7-pair scan and outcome tracking completed.")
 
 
+def _handle_callback_in_background(cq: dict[str, Any]) -> None:
+    """Process Telegram callback_query and sync updated memory files in a background thread."""
+    try:
+        _MEMORY_READY.wait(timeout=20)
+        telegram_listener._process_callback_query(cq)
+
+        # Persist state to GitHub 'memory' branch after user button interaction
+        data_str = cq.get("data", "")
+        action = data_str.split(":", 1)[0] if ":" in data_str else "action"
+        github_sync.push_memory_files(f"User Telegram button: {action}")
+    except Exception as exc:
+        print(f"  [cloud_server] Error processing callback_query: {exc}")
+
+
 @app.post("/telegram-webhook")
 async def telegram_webhook(request: Request) -> dict[str, str]:
     """
     Receive instant button interactions from Telegram without long-polling.
-    Routes callback queries directly into telegram_listener._process_callback_query().
+    Dispatches callback queries to a background daemon thread so FastAPI responds immediately.
     """
     try:
         update: dict[str, Any] = await request.json()
     except Exception:
         return {"status": "ignored", "reason": "invalid_json"}
 
-    # Process button taps
+    # Process button taps in background so cTrader WebSocket calls never block webhook response
     if "callback_query" in update:
         cq = update["callback_query"]
-        try:
-            _MEMORY_READY.wait(timeout=20)
-            telegram_listener._process_callback_query(cq)
-
-            # Persist state to GitHub 'memory' branch after user button interaction
-            data_str = cq.get("data", "")
-            action = data_str.split(":", 1)[0] if ":" in data_str else "action"
-            threading.Thread(
-                target=github_sync.push_memory_files,
-                args=(f"User Telegram button: {action}",),
-                daemon=True,
-            ).start()
-        except Exception as exc:
-            print(f"  [cloud_server] Error processing callback_query: {exc}")
+        threading.Thread(
+            target=_handle_callback_in_background,
+            args=(cq,),
+            daemon=True,
+        ).start()
 
     # Handling of user slash commands
     elif "message" in update:
@@ -441,12 +446,17 @@ async def telegram_webhook(request: Request) -> dict[str, str]:
             cmd = text.split()[0].split("@")[0].lower() if text else ""
             if cmd in ("/status", "/health", "/ping"):
                 mode = "DEMO_DISCOVERY" if getattr(config, "DEMO_DISCOVERY_MODE", False) else ("DEMO" if config.DEMO_MODE else "LIVE")
+                if broker_executor.has_ctrader_credentials():
+                    exec_label = "cTrader Open API (DEMO)" if config.DEMO_MODE else "cTrader Open API (LIVE)"
+                else:
+                    exec_label = "Manual Fallback"
                 notify_state = getattr(config, "NOTIFY_MODE", "GATE2_ONLY")
                 watchlist_str = ", ".join(config.WATCHLIST)
                 status_msg = (
                     "🟢 CO-PILOT SYSTEM STATUS\n"
                     "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                     f"⚙️ Mode         : {mode}\n"
+                    f"⚡ Executor     : {exec_label}\n"
                     f"🔔 Notification : {notify_state}\n"
                     f"⏱ Expiry       : {config.SIGNAL_EXPIRY_MINUTES} min\n"
                     f"📋 Watchlist    : {watchlist_str}\n"

@@ -6,8 +6,9 @@ Formats a clean, readable trade card and sends it via Telegram.
 For actionable signals (ENTER_LONG / ENTER_SHORT):
   - Saves the signal to pending_signals.json (keyed by signal_id).
   - Sends a Telegram message with InlineKeyboardMarkup:
-      [✅ Accept & Enter]   callback_data="accept:<signal_id>"
-      [❌ Decline]          callback_data="decline:<signal_id>"
+      [⚡ Accept & Auto-Execute]  callback_data="accept:<signal_id>"
+      [❌ Decline]                callback_data="decline:<signal_id>"
+      [📱 I Entered Manually]     callback_data="manual:<signal_id>"
 
 For NO_TRADE signals:
   - Sends a plain informational card (no buttons).
@@ -25,6 +26,7 @@ from typing import Any
 import pytz
 import requests
 
+import broker_executor
 import config
 import pattern_stats
 
@@ -324,7 +326,7 @@ def _format_card(
             f"  Take Profit : {trade_plan.get('take_profit', '?')}",
             f"  R:R Ratio   : 1 : {trade_plan.get('risk_reward', '?')}",
             f"  Risk (USD)  : ${trade_plan.get('risk_usd') or math_result.get('actual_risk_usd') or trade_plan.get('risk_usd', '?')}",
-            f"  Std Lots    : {std_lots} lots  (MT5)",
+            f"  Std Lots    : {std_lots} lots  (cTrader)",
             f"  Micro Lots  : {micro_lots} µlots (ref)",
             "",
         ]
@@ -394,34 +396,59 @@ def _score_bar(score: int) -> str:
 def _send_telegram_with_buttons(message: str, signal_id: str) -> None:
     """
     Send a Telegram message with InlineKeyboardMarkup:
-      [📱 I Entered on MT5 Mobile]  callback_data="manual:<signal_id>"
-      [✅ Accept & Enter]           callback_data="accept:<signal_id>"
-      [❌ Decline]                  callback_data="decline:<signal_id>"
+      When cTrader Open API credentials are configured:
+        Row 1: [⚡ Accept & Auto-Execute]  [❌ Decline]
+        Row 2: [📱 I Entered Manually]
+      Otherwise:
+        Row 1: [📱 I Entered Manually]
+        Row 2: [✅ Accept & Enter]  [❌ Decline]
     """
+    if broker_executor.has_ctrader_credentials():
+        inline_keyboard = [
+            [
+                {
+                    "text":          "⚡ Accept & Auto-Execute",
+                    "callback_data": f"accept:{signal_id}",
+                },
+                {
+                    "text":          "❌ Decline",
+                    "callback_data": f"decline:{signal_id}",
+                },
+            ],
+            [
+                {
+                    "text":          "📱 I Entered Manually",
+                    "callback_data": f"manual:{signal_id}",
+                },
+            ],
+        ]
+    else:
+        inline_keyboard = [
+            [
+                {
+                    "text":          "📱 I Entered Manually",
+                    "callback_data": f"manual:{signal_id}",
+                },
+            ],
+            [
+                {
+                    "text":          "✅ Accept & Enter",
+                    "callback_data": f"accept:{signal_id}",
+                },
+                {
+                    "text":          "❌ Decline",
+                    "callback_data": f"decline:{signal_id}",
+                },
+            ],
+        ]
+
     url = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id":    config.TELEGRAM_CHAT_ID,
         "text":       f"<pre>{html.escape(message)}</pre>",
         "parse_mode": "HTML",
         "reply_markup": {
-            "inline_keyboard": [
-                [
-                    {
-                        "text":          "📱 I Entered on MT5 Mobile",
-                        "callback_data": f"manual:{signal_id}",
-                    },
-                ],
-                [
-                    {
-                        "text":          "✅ Accept & Enter",
-                        "callback_data": f"accept:{signal_id}",
-                    },
-                    {
-                        "text":          "❌ Decline",
-                        "callback_data": f"decline:{signal_id}",
-                    },
-                ]
-            ]
+            "inline_keyboard": inline_keyboard,
         },
     }
     try:
@@ -553,10 +580,9 @@ def send_outcome_update(card: str) -> None:
 
 def send_manual_outcome_alert(message: str) -> None:
     """
-    Send an immediate manual trade completion alert (WIN or LOSS) to Telegram.
-    Wording complies with user requirement:
-      🎉 MANUAL TRADE FINISHED — WIN | {pair} ({direction}) | Exit: {exit_price} | PnL: +${pnl_usd:.2f} | AI memory updated.
-      🛑 MANUAL TRADE FINISHED — LOSS | {pair} ({direction}) | Exit: {exit_price} | PnL: -${abs(pnl_usd):.2f} | Loss lesson saved to AI memory.
+    Send an immediate trade completion alert (WIN or LOSS) to Telegram:
+      🎉 TRADE FINISHED — WIN | {pair} ({direction}) | Exit: {exit_price} | PnL: +${pnl_usd:.2f} | AI memory updated.
+      🛑 TRADE FINISHED — LOSS | {pair} ({direction}) | Exit: {exit_price} | PnL: -${abs(pnl_usd):.2f} | Loss lesson saved to AI memory.
     """
     if config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID:
         url = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/sendMessage"

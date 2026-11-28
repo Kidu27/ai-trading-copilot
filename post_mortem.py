@@ -2,7 +2,7 @@
 post_mortem.py — Automated Trade Post-Mortem & Rolling Memory System
 
 When a demo or live trade closes (hits Stop-Loss or Take-Profit):
-  1. Inspects active_trades.json (or MT5_FILES_DIR/closed_trades/).
+  1. Inspects active_trades.json.
   2. Updates trades_log.csv with exit_price, exit_time, pnl_usd, and outcome (WIN / LOSS).
   3. Gathers trade details and 15min candle context covering the trade duration.
   4. Calls GEMINI_MODEL (gemini-4-hydrogen) via the official google-genai SDK
@@ -425,8 +425,8 @@ def analyze_trade_with_ai(
 
 def check_closed_trades(mock_candles: pd.DataFrame | None = None) -> list[dict[str, Any]]:
     """
-    Inspect active_trades.json (and MT5_FILES_DIR/closed_trades/) for any trades
-    that have closed but have not yet undergone post-mortem analysis.
+    Inspect active_trades.json for any trades that have closed
+    but have not yet undergone post-mortem analysis.
 
     For each closed trade:
       - Runs post-mortem AI audit
@@ -440,26 +440,6 @@ def check_closed_trades(mock_candles: pd.DataFrame | None = None) -> list[dict[s
     """
     trades = load_active_trades()
     reports: list[dict[str, Any]] = []
-
-    # Check for MT5 bridge closed order JSON files if configured
-    if config.MT5_FILES_DIR:
-        closed_dir = os.path.join(config.MT5_FILES_DIR, "closed_trades")
-        if os.path.exists(closed_dir):
-            for fname in os.listdir(closed_dir):
-                if fname.startswith("close_") and fname.endswith(".json"):
-                    fpath = os.path.join(closed_dir, fname)
-                    try:
-                        with open(fpath, "r", encoding="utf-8") as fh:
-                            cdata = json.load(fh)
-                        sig_id = cdata.get("signal_id")
-                        if sig_id and sig_id in trades:
-                            trades[sig_id]["status"] = "CLOSED"
-                            trades[sig_id]["exit_price"] = cdata.get("exit_price")
-                            trades[sig_id]["closed_eat"] = cdata.get("exit_time")
-                            trades[sig_id]["pnl_usd"] = cdata.get("pnl_usd")
-                            trades[sig_id]["outcome"] = cdata.get("outcome", "LOSS")
-                    except Exception as exc:
-                        print(f"  [post_mortem] Error reading MT5 closed file {fname}: {exc}")
 
     eat_tz = pytz.timezone(config.TIMEZONE)
     now_eat_str = datetime.now(tz=eat_tz).strftime("%Y-%m-%d %H:%M:%S")

@@ -10,12 +10,12 @@ Using 15m candle highs and lows:
   - For unentered / declined / skipped setups:
       Resolves outcome as SHADOW_WIN / SHADOW_LOSS, updates pattern_history.json,
       and records loss lessons in lessons_learned.json.
-  - For active EXECUTED / MANUAL MT5 trades:
+  - For active EXECUTED / cTrader trades:
       Resolves outcome to WIN / LOSS, updates trades_log.csv, removes from active_trades.json,
       updates pattern_history.json, triggers post_mortem lesson on loss, and sends an
       immediate Telegram completion alert:
-        Win:  🎉 MANUAL TRADE FINISHED — WIN | {pair} ({direction}) | Exit: {exit_price} | PnL: +${pnl_usd:.2f} | AI memory updated.
-        Loss: 🛑 MANUAL TRADE FINISHED — LOSS | {pair} ({direction}) | Exit: {exit_price} | PnL: -${abs(pnl_usd):.2f} | Loss lesson saved to AI memory.
+        Win:  🎉 TRADE FINISHED — WIN | {pair} ({direction}) | Exit: {exit_price} | PnL: +${pnl_usd:.2f} | AI memory updated.
+        Loss: 🛑 TRADE FINISHED — LOSS | {pair} ({direction}) | Exit: {exit_price} | PnL: -${abs(pnl_usd):.2f} | Loss lesson saved to AI memory.
 """
 
 import csv
@@ -107,7 +107,7 @@ def check_open_signal_outcomes(
                 "exit_price": "",
                 "exit_time": "",
                 "pnl_usd": "",
-                "notes": "Manually entered on MT5 Mobile — auto-tracking SL/TP",
+                "notes": "Executed on cTrader — auto-tracking SL/TP",
             }
             rows.append(new_row)
             logged_signal_ids.add(sid)
@@ -374,20 +374,20 @@ def check_open_signal_outcomes(
         else:
             pnl_usd = -round(risk_usd, 2)
 
-        is_manual = (not is_shadow) and (
+        is_executed_trade = (not is_shadow) and (
             outcome in ("EXECUTED", "MANUAL")
-            or act_trade.get("source") == "MANUAL_MT5"
-            or "MANUAL" in notes.upper()
             or signal_id in active_trades
+            or act_trade.get("executor") in ("ctrader_demo", "ctrader_live", "manual")
+            or "MANUAL" in notes.upper()
         )
 
-        if is_manual:
+        if is_executed_trade:
             final_outcome = hit_outcome
             row["outcome"] = final_outcome
             row["exit_price"] = str(hit_price)
             row["exit_time"] = hit_time_str
             row["pnl_usd"] = str(pnl_usd)
-            row["notes"] = f"Automated candle detection (MANUAL MT5): {hit_outcome} hit"
+            row["notes"] = f"Automated candle detection (cTrader): {hit_outcome} hit"
             updated_rows_needed = True
 
             # 1. Remove from active_trades.json
@@ -441,9 +441,9 @@ def check_open_signal_outcomes(
 
             # 4. Send Telegram Win/Loss notification immediately via notifier.py
             if hit_outcome == "WIN":
-                alert_msg = f"🎉 MANUAL TRADE FINISHED — WIN | {pair} ({decision}) | Exit: {hit_price} | PnL: +${pnl_usd:.2f} | AI memory updated."
+                alert_msg = f"🎉 TRADE FINISHED — WIN | {pair} ({decision}) | Exit: {hit_price} | PnL: +${pnl_usd:.2f} | AI memory updated."
             else:
-                alert_msg = f"🛑 MANUAL TRADE FINISHED — LOSS | {pair} ({decision}) | Exit: {hit_price} | PnL: -${abs(pnl_usd):.2f} | Loss lesson saved to AI memory."
+                alert_msg = f"🛑 TRADE FINISHED — LOSS | {pair} ({decision}) | Exit: {hit_price} | PnL: -${abs(pnl_usd):.2f} | Loss lesson saved to AI memory."
 
             try:
                 notifier.send_manual_outcome_alert(alert_msg)

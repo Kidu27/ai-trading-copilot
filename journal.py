@@ -95,12 +95,12 @@ def log_setup(
 def log_executed_trade(
     signal: dict[str, Any],
     fill_price: float | None = None,
-    notes: str = "Manually entered on MT5 Mobile — auto-tracking SL/TP",
+    notes: str = "Executed on cTrader — auto-tracking SL/TP",
 ) -> None:
     """
     Log or update an accepted/executed trade in trades_log.csv in-place.
 
-    Called by telegram_listener when user taps [✅ Accept & Enter] or [📱 I Entered on MT5 Mobile].
+    Called by telegram_listener when user taps [⚡ Accept & Auto-Execute] or [📱 I Entered Manually].
     Updates existing row matching signal_id (decision, outcome="EXECUTED", entry_price, notes)
     to eliminate duplicate rows and ensure proper direction & level tracking.
     """

@@ -7,6 +7,5 @@ pytz>=2024.1
 pydantic>=2.0.0
 fastapi>=0.100.0
 uvicorn>=0.22.0
-# NOTE: The Windows-only 'MetaTrader5' package is intentionally excluded.
-# This project runs on macOS. MT5 integration uses a JSON file-bridge EA
-# (see broker_executor.MT5MacBridgeExecutor and config.MT5_FILES_DIR).
+websockets>=12.0
+certifi>=2024.0.0

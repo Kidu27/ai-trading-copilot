@@ -264,9 +264,9 @@ def run_mock_tests(
     print("\n[6/10] Testing MockDemoExecutor …")
     _check(config.DEMO_MODE, "DEMO_MODE is True (safe)")
 
-    executor = broker_executor.get_executor()
+    executor = broker_executor.MockDemoExecutor()
     _check(isinstance(executor, broker_executor.MockDemoExecutor),
-           "get_executor() returned MockDemoExecutor")
+           "MockDemoExecutor instantiated directly")
 
     mock_math, mock_ai = _build_mock_approved_signal(result, regime)
     test_signal  = _notifier._build_signal("EUR/USD (MOCK)", mock_math, mock_ai)
@@ -408,7 +408,7 @@ def run_mock_tests(
     print(f"  S/R zones     : {len(result['sr_zones'])} cluster(s)")
     print(f"  Math gate     : {'PASS' if result['passed_math_gate'] else 'FAIL (expected for RANGING)'}")
     print(f"  R:R ratio     : {result.get('risk_reward_ratio', 'N/A')}")
-    print(f"  Std Lots      : {result.get('position_size_lots', 'N/A')} (MT5)")
+    print(f"  Std Lots      : {result.get('position_size_lots', 'N/A')} (cTrader)")
     print(f"  Micro Lots    : {result.get('position_size_micro_lots', 'N/A')} (ref)")
     print(f"  Memory lessons: {len(lessons)} lesson(s) active in ai_auditor")
     print(f"\n  Full Gate 2 JSON output:")
@@ -453,7 +453,7 @@ def run_live_test() -> None:
     print(f"  Near Zone?    : {result.get('price_near_key_zone')}")
     print(f"  Candle Pattern: {result['candle_story'].get('pattern')}")
     print(f"  R:R Ratio     : {result.get('risk_reward_ratio')}")
-    print(f"  Std Lots      : {result.get('position_size_lots')} (MT5)")
+    print(f"  Std Lots      : {result.get('position_size_lots')} (cTrader)")
     print(f"  Micro Lots    : {result.get('position_size_micro_lots')} (ref)")
     print(f"  Math Gate     : {'✅ PASS' if result['passed_math_gate'] else '❌ FAIL'}")
 

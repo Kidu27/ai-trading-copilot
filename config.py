@@ -81,11 +81,12 @@ SIGNAL_EXPIRY_MINUTES: int = 15     # Telegram approval buttons expire after N m
 NOTIFY_NO_TRADE: bool = os.getenv("NOTIFY_NO_TRADE", "false").lower() in ("true", "1")  # False = quiet mode (actionable only)
 NOTIFY_MODE: str = os.getenv("NOTIFY_MODE", "TRADES_ONLY")     # Supported: "ALL", "GATE2_ONLY", "TRADES_ONLY"
 
-# ── MetaTrader 5 macOS File-Bridge (optional) ──────────────────────────────────
-# Set to the absolute path of MetaTrader 5's MQL5/Files directory on macOS,
-# e.g. "/Users/mac/Library/Application Support/net.metaquotes.wine.metatrader5/drive_c/..."
-# Leave empty ("") to use MockDemoExecutor instead.
-MT5_FILES_DIR: str = os.getenv("MT5_FILES_DIR", "")
+# ── cTrader Open API (optional — cloud-native 1-tap order execution) ───────────
+CTRADER_CLIENT_ID: str = os.getenv("CTRADER_CLIENT_ID", "").strip()
+CTRADER_CLIENT_SECRET: str = os.getenv("CTRADER_CLIENT_SECRET", "").strip()
+CTRADER_ACCESS_TOKEN: str = os.getenv("CTRADER_ACCESS_TOKEN", "").strip()
+CTRADER_REFRESH_TOKEN: str = os.getenv("CTRADER_REFRESH_TOKEN", "").strip()
+CTRADER_ACCOUNT_ID: str = os.getenv("CTRADER_ACCOUNT_ID", "").strip()
 
 # ── Restored Compatibility Guardrails ──
 MAX_DAILY_LOSSES = 3

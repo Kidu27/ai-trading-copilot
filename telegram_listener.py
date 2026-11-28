@@ -148,7 +148,7 @@ def _get_base_card(cq: dict[str, Any], signal: dict[str, Any]) -> str:
         f"  Take Profit : {tp}\n"
         f"  R:R Ratio   : 1 : {rr}\n"
         f"  Risk (USD)  : ${risk_usd}\n"
-        f"  Std Lots    : {lots} lots  (MT5)\n"
+        f"  Std Lots    : {lots} lots  (cTrader)\n"
         f"  Units       : {units:,} units\n"
         f"  Signal ID   : {signal.get('signal_id', '')[:8]}…"
     )
@@ -209,15 +209,17 @@ def _handle_accept(
     cq: dict[str, Any],
 ) -> None:
     """
-    User tapped ✅ Accept & Enter.
+    User tapped [⚡ Accept & Auto-Execute] or [✅ Accept & Enter].
 
     1. Preserves full trade card numbers at the top.
     2. Checks signal expiry.
-    3. If MT5MacBridgeExecutor connected and succeeds -> confirms fill and attaches [Report WIN] / [Report LOSS].
-    4. If MT5MacBridgeExecutor fails or MT5_FILES_DIR disconnected (cloud mode) -> appends Manual MT5 Mobile Ticket
-       and attaches [Entered Manually] / [Skipped].
+    3. If cTrader Open API credentials are configured, submits a MARKET bracket
+       order via CTraderExecutor:
+         - On fill: marks EXECUTED, logs to journal, updates card hands-free.
+         - On error: displays exact cTrader error and presents manual fallback ticket.
+    4. If cTrader credentials are not configured: presents manual cTrader ticket.
     """
-    eat_tz  = pytz.timezone(config.TIMEZONE)
+    eat_tz = pytz.timezone(config.TIMEZONE)
     now_eat = datetime.now(tz=eat_tz)
     base_card = _get_base_card(cq, signal)
 
@@ -230,13 +232,13 @@ def _handle_accept(
     except ValueError:
         age_minutes = float("inf")
 
-    pair      = signal.get("pair", "?")
+    pair = signal.get("pair", "?")
     direction = signal.get("direction", "?")
-    std_lots  = signal.get("standard_lots", 0.01)
-    units     = signal.get("units", int(std_lots * 100_000))
-    entry     = signal.get("entry", "?")
-    sl        = signal.get("stop_loss", "?")
-    tp        = signal.get("take_profit", "?")
+    std_lots = signal.get("standard_lots", 0.01)
+    units = signal.get("units", int(std_lots * 100_000))
+    entry = signal.get("entry", "?")
+    sl = signal.get("stop_loss", "?")
+    tp = signal.get("take_profit", "?")
 
     # ── Expiry check ──────────────────────────────────────────────────────────
     if age_minutes > config.SIGNAL_EXPIRY_MINUTES:
@@ -265,58 +267,81 @@ def _handle_accept(
         )
         return
 
-    # ── Check if MT5 bridge is connected on disk ─────────────────────────────
-    import os
-    mt5_dir = getattr(config, "MT5_FILES_DIR", "") or os.getenv("MT5_FILES_DIR", "")
-    is_mt5_connected = bool(mt5_dir and os.path.isdir(mt5_dir))
+    manual_markup = {
+        "inline_keyboard": [
+            [
+                {"text": "📱 I Entered Manually", "callback_data": f"manual:{signal_id}"},
+                {"text": "⏭️ Skipped", "callback_data": f"skip:{signal_id}"},
+            ]
+        ]
+    }
 
-    if is_mt5_connected:
-        _answer_callback(callback_query_id, text="⚙️ Submitting to MT5 bridge…")
+    # ── cTrader Open API 1-tap execution ──────────────────────────────────────
+    if broker_executor.has_ctrader_credentials():
+        _answer_callback(callback_query_id, text="⚡ Executing on cTrader…")
         executor = broker_executor.get_executor()
-        result   = executor.execute_bracket_order(signal)
+        result = executor.execute_bracket_order(signal)
 
-        if result["success"]:
+        if result.get("success"):
             notifier.update_signal_status(signal_id, "EXECUTED")
             fill_price = result.get("fill_price", entry)
+            pos_id = result.get("ctrader_position_id", "N/A")
+            exec_tag = "cTRADER LIVE" if result.get("executor") == "ctrader_live" else "cTRADER DEMO"
 
             try:
                 journal.log_executed_trade(
                     signal,
                     fill_price=float(fill_price) if fill_price is not None else None,
-                    notes="Executed via MT5 Bridge",
+                    notes="Auto-executed via cTrader Open API",
                 )
             except Exception as exc:
                 print(f"  [listener] Warning: failed to log execution to journal: {exc}")
 
             edit_text = (
                 f"{base_card}\n\n"
-                f"✅ ORDER EXECUTED [MT5 BRIDGE]\n"
+                f"✅ ORDER EXECUTED [{exec_tag}]\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"🎫 Ticket : {result.get('mt5_ticket', 'N/A')}\n"
-                f"💵 Fill   : {fill_price}\n"
-                f"📦 Volume : {std_lots} std lots ({units:,} units)\n"
+                f"🆔 Position ID : {pos_id}\n"
+                f"💵 Fill Price  : {fill_price}\n"
+                f"🛑 Stop Loss   : {sl}\n"
+                f"🎯 Take Profit : {tp}\n"
+                f"📦 Volume      : {std_lots} std lots ({units:,} units)\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"Position is LIVE. When it closes, tap below to report outcome:"
+                f"Position is LIVE. Auto-tracking SL & TP via 15m candles (use /open only if you close early)."
             )
-            report_markup = {
-                "inline_keyboard": [
-                    [
-                        {"text": "🏆 Report WIN", "callback_data": f"win:{signal_id}"},
-                        {"text": "❌ Report LOSS", "callback_data": f"loss:{signal_id}"},
-                    ]
-                ]
-            }
-            _edit_message(chat_id, message_id, edit_text, reply_markup=report_markup)
-            print(f"  [listener] Signal {signal_id[:8]}… EXECUTED on MT5 bridge.")
+            _edit_message(chat_id, message_id, edit_text, reply_markup={"inline_keyboard": []})
+            print(f"  [listener] Signal {signal_id[:8]}… EXECUTED on {exec_tag} (Position {pos_id}).")
             return
 
-    # ── Fallback: Manual MT5 Mobile Ticket ────────────────────────────────────
+        # cTrader error (e.g. MARKET_CLOSED or rejection) -> manual fallback ticket
+        err_detail = result.get("error") or result.get("message") or "Unknown cTrader error"
+        notifier.update_signal_status(signal_id, "WAITING_MANUAL")
+        manual_ticket = (
+            f"{base_card}\n\n"
+            f"⚠️ cTRADER AUTO-EXECUTION FAILED\n"
+            f"❌ Error: {err_detail}\n\n"
+            f"📱 MANUAL cTRADER TICKET\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📌 Pair        : {pair}\n"
+            f"📊 Side        : {direction}\n"
+            f"📦 Volume      : {std_lots} Lots ({units:,} units)\n"
+            f"💵 Entry Level : {entry}\n"
+            f"🛑 Stop Loss   : {sl}\n"
+            f"🎯 Take Profit : {tp}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"Open cTrader on your device to enter manually if desired, then tap below:"
+        )
+        _edit_message(chat_id, message_id, manual_ticket, reply_markup=manual_markup)
+        print(f"  [listener] Signal {signal_id[:8]}… cTrader failed ({err_detail}); manual ticket presented.")
+        return
+
+    # ── Fallback: Manual cTrader Ticket (when cTrader API is not configured) ──
     notifier.update_signal_status(signal_id, "WAITING_MANUAL")
-    _answer_callback(callback_query_id, text="📱 MT5 Bridge unavailable — manual ticket ready!", alert=False)
+    _answer_callback(callback_query_id, text="📱 cTrader API unconfigured — manual ticket ready!", alert=False)
 
     manual_ticket = (
         f"{base_card}\n\n"
-        f"📱 MANUAL MT5 MOBILE TICKET\n"
+        f"📱 MANUAL cTRADER TICKET\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"📌 Pair        : {pair}\n"
         f"📊 Side        : {direction}\n"
@@ -325,16 +350,8 @@ def _handle_accept(
         f"🛑 Stop Loss   : {sl}\n"
         f"🎯 Take Profit : {tp}\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"ℹ️ MT5 Bridge disconnected (Cloud/Mobile Mode). Open MT5 on your phone, enter the ticket above, then tap below:"
+        f"ℹ️ cTrader Open API is not configured. Open cTrader, enter the ticket above, then tap below:"
     )
-    manual_markup = {
-        "inline_keyboard": [
-            [
-                {"text": "📱 I Entered on MT5 Mobile", "callback_data": f"manual:{signal_id}"},
-                {"text": "⏭️ Skipped", "callback_data": f"skip:{signal_id}"},
-            ]
-        ]
-    }
     _edit_message(chat_id, message_id, manual_ticket, reply_markup=manual_markup)
     print(f"  [listener] Signal {signal_id[:8]}… manual ticket presented to user.")
 
@@ -347,12 +364,12 @@ def _handle_manual(
     callback_query_id: str,
     cq: dict[str, Any],
 ) -> None:
-    """User tapped [📱 I Entered on MT5 Mobile]."""
+    """User tapped [📱 I Entered Manually]."""
     _answer_callback(callback_query_id, text="✅ Trade recorded! Auto-tracking SL & TP via 15m candles.")
     notifier.update_signal_status(signal_id, "EXECUTED")
     base_card = _get_base_card(cq, signal)
 
-    eat_tz  = pytz.timezone(config.TIMEZONE)
+    eat_tz = pytz.timezone(config.TIMEZONE)
     now_eat = datetime.now(tz=eat_tz)
     now_eat_str = now_eat.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -387,7 +404,7 @@ def _handle_manual(
         journal.log_executed_trade(
             signal,
             fill_price=entry,
-            notes="Manually entered on MT5 Mobile — auto-tracking SL/TP",
+            notes="Manually entered on cTrader — auto-tracking SL/TP",
         )
     except Exception as exc:
         print(f"  [listener] Warning: failed to log manual trade to journal: {exc}")
@@ -406,8 +423,7 @@ def _handle_manual(
         "risk_reward":   risk_reward,
         "standard_lots": signal.get("standard_lots", 0.01),
         "units":         signal.get("units", 1000),
-        "mt5_ticket":    "MANUAL_ENTRY",
-        "source":        "MANUAL_MT5",
+        "source":        "MANUAL_CTRADER",
         "status":        "OPEN",
         "executor":      "manual",
         "demo_mode":     config.DEMO_MODE,
@@ -420,7 +436,7 @@ def _handle_manual(
 
     confirm_note = (
         f"{base_card}\n\n"
-        f"📱 MANUALLY ENTERED ON MT5 MOBILE\n"
+        f"📱 MANUALLY ENTERED ON cTRADER\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"Side       : {true_dir}\n"
         f"Entry      : {entry}\n"
@@ -431,7 +447,7 @@ def _handle_manual(
         f"You will be alerted automatically when the trade finishes (use /open only if you close early manually)."
     )
     _edit_message(chat_id, message_id, confirm_note, reply_markup={"inline_keyboard": []})
-    print(f"  [listener] Signal {signal_id[:8]}… confirmed as MANUAL MT5 trade ({true_dir}).")
+    print(f"  [listener] Signal {signal_id[:8]}… confirmed as MANUAL cTrader trade ({true_dir}).")
 
 
 def _handle_skip(
@@ -672,7 +688,7 @@ def _process_callback_query(cq: dict[str, Any]) -> None:
         elif action == "accept":
             _handle_accept(signal_id, signal, chat_id, message_id, callback_query_id, cq)
 
-    elif action in ("manual", "manual_mt5", "mt5_manual", "skip"):
+    elif action in ("manual", "skip"):
         if current_status not in ("PENDING", "WAITING_MANUAL"):
             _answer_callback(
                 callback_query_id,
@@ -680,7 +696,7 @@ def _process_callback_query(cq: dict[str, Any]) -> None:
                 alert=True,
             )
             return
-        if action in ("manual", "manual_mt5", "mt5_manual"):
+        if action == "manual":
             _handle_manual(signal_id, signal, chat_id, message_id, callback_query_id, cq)
         elif action == "skip":
             _handle_skip(signal_id, signal, chat_id, message_id, callback_query_id, cq)
