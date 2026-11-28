@@ -475,7 +475,7 @@
     "confluence_score": 80,
     "risk_reward": 2.2,
     "risk_usd": 9.54,
-    "status": "EXECUTED"
+    "status": "CLOSED_LOSS"
   },
   "51a53bc0-4d58-459f-a8a7-de653cabc918": {
     "signal_id": "51a53bc0-4d58-459f-a8a7-de653cabc918",
@@ -491,7 +491,7 @@
     "confluence_score": 80,
     "risk_reward": 1.44,
     "risk_usd": 9.06,
-    "status": "EXECUTED"
+    "status": "CLOSED_LOSS"
   },
   "9f0c288e-c974-41dc-9c81-6c6047268c58": {
     "signal_id": "9f0c288e-c974-41dc-9c81-6c6047268c58",
