@@ -1,54 +1,5 @@
 [
   {
-    "timestamp_eat": "2026-11-26 14:30:00",
-    "pair": "GBP/AUD",
-    "outcome": "SHADOW_LOSS",
-    "actionable_lesson": "Add a volatility\u2011spike filter that aborts entries when the 15\u2011minute candle\u2019s low breaches the stop\u2011loss level by more than 5\u202fpips before execution.",
-    "root_cause": "A sudden down\u2011tick on the 11:15\u202f15\u2011minute candle pushed price below the stop\u2011loss, indicating a volatility spike that overwhelmed the trade's buffer."
-  },
-  {
-    "timestamp_eat": "2026-11-26 14:15:00",
-    "pair": "EUR/JPY",
-    "outcome": "LOSS",
-    "actionable_lesson": "Set the stop\u2011loss at the 15\u2011minute low of the candle that produced the entry, not a fixed distance below the entry price.",
-    "root_cause": "Price pulled back below the 15\u2011minute low of the 11:00 candle, breaching the stop\u2011loss level that was set just below the 10:30 support."
-  },
-  {
-    "timestamp_eat": "2026-11-26 14:30:00",
-    "pair": "GBP/AUD",
-    "outcome": "SHADOW_LOSS",
-    "actionable_lesson": "Incorporate a volatility\u2011adjusted stop\u2011loss buffer or require a confirming higher\u2011time low before entering to avoid being stopped out by intra\u2011candle spikes.",
-    "root_cause": "A sudden down\u2011tick on the 11:15\u202f15\u2011minute candle pushed price below the stop\u2011loss, indicating a volatility spike that overcame the expected support level."
-  },
-  {
-    "timestamp_eat": "2026-11-26 16:15:00",
-    "pair": "GBP/AUD",
-    "outcome": "SHADOW_LOSS",
-    "actionable_lesson": "Only enter a long position when the 15\u2011minute candle closes above the 1.97444 support level and the 1\u2011hour trend confirms a higher high, ensuring the support zone is intact before risking the stop.",
-    "root_cause": "The price retraced sharply after the 12:00\u201112:15 candle, breaking the 1.97444 support level and triggering the stop\u2011loss."
-  },
-  {
-    "timestamp_eat": "2026-11-26 16:15:00",
-    "pair": "GBP/AUD",
-    "outcome": "SHADOW_LOSS",
-    "actionable_lesson": "Only enter a long position when the 15m candle closes above the entry price and the close is at least 0.0005 above the stop\u2011loss level to avoid immediate stop\u2011loss hits.",
-    "root_cause": "The price retraced below the 1.97445 stop\u2011loss level after the 13:00\u201113:15 candle, indicating a failure of the 1H trend to sustain a higher high and a breach of the 15m support zone."
-  },
-  {
-    "timestamp_eat": "2026-11-26 17:45:00",
-    "pair": "GBP/AUD",
-    "outcome": "SHADOW_LOSS",
-    "actionable_lesson": "Require a confirming 15\u2011minute candle that closes above the high of the entry candle before entering, to avoid trades that reverse within the same session.",
-    "root_cause": "The price reversed sharply after a brief rally, breaching the entry level and sliding into the stop\u2011loss zone, likely triggered by a short\u2011term bearish pressure on the 15\u2011minute chart."
-  },
-  {
-    "timestamp_eat": "2026-11-26 17:45:00",
-    "pair": "GBP/AUD",
-    "outcome": "SHADOW_LOSS",
-    "actionable_lesson": "Require that the low of the confirming 15\u2011minute candle stays at least 5\u202fpips above the stop\u2011loss before entering a trade.",
-    "root_cause": "The price reversed sharply after the 14:45\u202f15\u2011minute candle closed below the entry, driving the market into the stop\u2011loss zone, likely due to a short\u2011term bearish pressure that wasn\u2019t filtered out."
-  },
-  {
     "timestamp_eat": "2026-11-26 17:45:00",
     "pair": "GBP/AUD",
     "outcome": "LOSS",
@@ -68,5 +19,54 @@
     "outcome": "SHADOW_LOSS",
     "actionable_lesson": "Incorporate an additional volatility\u2011threshold filter that blocks entries when the 15\u2011minute candle range exceeds 0.3% of the entry price.",
     "root_cause": "A sudden bearish micro\u2011spike pushed price below the stop\u2011loss, eroding the intended upside bias before any recovery could occur."
+  },
+  {
+    "timestamp_eat": "2026-11-27 18:15:00",
+    "pair": "EUR/JPY",
+    "outcome": "LOSS",
+    "actionable_lesson": "Add a volatility\u2011based stop\u2011loss that expands only when the ATR exceeds 0.02% of the entry price to avoid being stopped out by normal market swings.",
+    "root_cause": "The price dipped below the stop\u2011loss level during a sharp intraday swing, with the 15\u2011minute candles showing lows around 174.425 and a high of 174.839, indicating a volatility spike that pushed the market past the set stop."
+  },
+  {
+    "timestamp_eat": "2026-11-27 12:30:00",
+    "pair": "EUR/USD",
+    "outcome": "SHADOW_LOSS",
+    "actionable_lesson": "Only enter long positions when the 1\u2011hour chart confirms a bullish HH/HL structure aligned with S/R and Fib zones.",
+    "root_cause": "The trade was taken against a bearish 1\u2011hour structure, so price quickly resumed the downtrend and hit the stop\u2011loss."
+  },
+  {
+    "timestamp_eat": "2026-11-27 12:30:00",
+    "pair": "EUR/USD",
+    "outcome": "SHADOW_LOSS",
+    "actionable_lesson": "Only enter a long trade when the breakout candle\u2019s close is above the stop\u2011loss level, not merely when the high touches it.",
+    "root_cause": "The price failed to sustain the breakout; the 15\u2011minute candle only touched the stop\u2011loss level (1.09573) but closed below it, causing a pullback to the support and triggering the stop."
+  },
+  {
+    "timestamp_eat": "2026-11-27 22:00:00",
+    "pair": "GBP/USD",
+    "outcome": "SHADOW_LOSS",
+    "actionable_lesson": "Add a 15\u2011minute candle close filter that requires the candle to close above the stop\u2011loss level before entering a long position.",
+    "root_cause": "The price pulled back below the 1.30915 stop\u2011loss level during the 04:00\u201104:15\u202fh interval, breaking the short\u2011term support that had been identified as the 1\u2011hour trend\u2019s low."
+  },
+  {
+    "timestamp_eat": "2026-11-27 19:00:00",
+    "pair": "EUR/JPY",
+    "outcome": "SHADOW_LOSS",
+    "actionable_lesson": "Only take long positions when the 15\u2011minute candle closes above the 174.455 support level to avoid instant stop\u2011loss breaches.",
+    "root_cause": "The price broke the 174.455 support level immediately after entry, causing the stop\u2011loss to be hit."
+  },
+  {
+    "timestamp_eat": "2026-11-27 01:45:00",
+    "pair": "EUR/USD",
+    "outcome": "SHADOW_LOSS",
+    "actionable_lesson": "Only enter a long trade when the 15\u2011minute candle closes above the 1\u2011hour trend line and the Fibonacci Golden Zone, otherwise skip the setup.",
+    "root_cause": "The price failed to break the 15\u2011minute close trigger and retraced below the stop\u2011loss level, causing the trade to exit at 1.09663."
+  },
+  {
+    "timestamp_eat": "2026-11-27 04:15:00",
+    "pair": "EUR/JPY",
+    "outcome": "LOSS",
+    "actionable_lesson": "Require a closed 15\u2011minute candle that closes at least 5\u202fpips above the intended entry before triggering a long trade.",
+    "root_cause": "The price failed to sustain the bullish momentum and quickly reversed, breaching the stop\u2011loss as the 15\u2011minute candles never closed above the entry level, indicating a false breakout."
   }
 ]
