@@ -41,20 +41,23 @@ import telegram_listener
 # Lifespan: Automatic Telegram Webhook Registration & Memory Restoration
 # ─────────────────────────────────────────────────────────────────────────────
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
+_MEMORY_READY = threading.Event()
+
+
+def _startup_background_init() -> None:
     """
-    On Render startup:
-      1. Pull persistent memory state from GitHub 'memory' branch BEFORE any scans or webhooks.
-      2. Register the Telegram webhook if RENDER_EXTERNAL_URL is set.
+    Background initialization worker:
+      1. Pull persistent memory state from GitHub 'memory' branch.
+      2. Set _MEMORY_READY in a finally block so scans and callbacks see restored state.
+      3. Register the Telegram webhook if RENDER_EXTERNAL_URL is set.
     """
-    # 1. Restore memory state from GitHub
     try:
         github_sync.pull_memory_files()
     except Exception as exc:
         print(f"  [cloud_server] ⚠️ Error pulling memory files from GitHub: {exc}")
+    finally:
+        _MEMORY_READY.set()
 
-    # 2. Register Telegram webhook
     render_url = os.getenv("RENDER_EXTERNAL_URL", "").strip().rstrip("/")
     if render_url and config.TELEGRAM_BOT_TOKEN:
         webhook_url = f"{render_url}/telegram-webhook"
@@ -79,6 +82,15 @@ async def lifespan(app: FastAPI):
     else:
         print("  [cloud_server] ℹ️ RENDER_EXTERNAL_URL not set — running in local/polling mode.")
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    On Render startup:
+      Launch _startup_background_init in a daemon thread and immediately yield so
+      Uvicorn binds the port and responds to /health checks right away.
+    """
+    threading.Thread(target=_startup_background_init, daemon=True).start()
     yield
     print("  [cloud_server] 🛑 Shutting down cloud runner.")
 
@@ -228,6 +240,7 @@ _SCAN_LOCK = threading.Lock()
 
 def _execute_scan_task() -> None:
     """Background worker running market scan (which includes outcome tracking) and GitHub memory sync."""
+    _MEMORY_READY.wait(timeout=20)
     if not _SCAN_LOCK.acquire(blocking=False):
         print("  [cloud_server] ⏭️ Scan already in progress — skipping overlapping trigger.")
         return
@@ -405,6 +418,7 @@ async def telegram_webhook(request: Request) -> dict[str, str]:
     if "callback_query" in update:
         cq = update["callback_query"]
         try:
+            _MEMORY_READY.wait(timeout=20)
             telegram_listener._process_callback_query(cq)
 
             # Persist state to GitHub 'memory' branch after user button interaction
