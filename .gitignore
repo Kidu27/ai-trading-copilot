@@ -32,3 +32,10 @@ build/
 
 # Pytest cache
 .pytest_cache/
+
+# Runtime memory files (managed on GitHub memory branch only)
+trades_log.csv
+pattern_history.json
+lessons_learned.json
+pending_signals.json
+active_trades.json
