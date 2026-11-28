@@ -395,7 +395,7 @@
     "confluence_score": 78,
     "risk_reward": 1.79,
     "risk_usd": 9.6,
-    "status": "EXECUTED"
+    "status": "CLOSED_LOSS"
   },
   "34de241d-8bcf-429a-80f9-9e41a53df154": {
     "signal_id": "34de241d-8bcf-429a-80f9-9e41a53df154",
@@ -427,7 +427,7 @@
     "confluence_score": 80,
     "risk_reward": 2.2,
     "risk_usd": 9.43,
-    "status": "WAITING_MANUAL"
+    "status": "CLOSED_SHADOW_WIN"
   },
   "f3393b21-5fb9-4a7a-b567-1630cb144070": {
     "signal_id": "f3393b21-5fb9-4a7a-b567-1630cb144070",
@@ -443,7 +443,7 @@
     "confluence_score": 80,
     "risk_reward": 2.2,
     "risk_usd": 9.77,
-    "status": "EXECUTED"
+    "status": "CLOSED_LOSS"
   },
   "116fcfab-19a6-4f10-9f7a-d58aedac3f9c": {
     "signal_id": "116fcfab-19a6-4f10-9f7a-d58aedac3f9c",
