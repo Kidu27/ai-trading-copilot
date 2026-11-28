@@ -163,6 +163,7 @@ to you meets ALL criteria for a high-probability trade signal.
 4. Any Confluence Score below {min_score} MUST produce `NO_TRADE`.
 5. If `confluence_score >= {min_score}` and the setup aligns with `trend_1h`, `decision` MUST be `ENTER_LONG` (for UPTREND) or `ENTER_SHORT` (for DOWNTREND).
 6. If you reject a setup as `NO_TRADE`, your `confluence_score` MUST be strictly below {min_score}.
+7. Reward early pullback entries close to support/resistance (`distance_from_zone_atr <= 0.5`). STRICTLY PENALIZE late/chased entries that already rallied far from the zone — never award 80+ to an extended move.
 
 ## YOUR 5-STEP AUDIT CHECKLIST
 You must evaluate each step and assign PASS or FAIL:
@@ -207,6 +208,7 @@ CRITICAL SCORING & DECISION RULES:
 - If confluence_score >= {min_score} and the setup aligns with trend_1h, decision MUST be `ENTER_LONG` (for UPTREND) or `ENTER_SHORT` (for DOWNTREND).
 - If you reject a setup as `NO_TRADE`, your confluence_score MUST be strictly below {min_score}.
 - Score < {min_score} → decision MUST be `NO_TRADE`.
+- Reward early pullback entries close to support/resistance (`distance_from_zone_atr <= 0.5`). STRICTLY PENALIZE late/chased entries that already rallied far from the zone — never award 80+ to an extended move.
 
 ## OUTPUT FORMAT — STRICT JSON
 Return ONLY valid JSON matching this exact schema:

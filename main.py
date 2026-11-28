@@ -18,10 +18,12 @@ Session guard (always active, even without --session-only):
   any Twelve Data or Gemini API credits.
 """
 
+import csv
+import os
 import sys
 import time
 import argparse
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 import pytz
@@ -34,6 +36,65 @@ import notifier
 import journal
 import post_mortem
 import pattern_stats
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Active trade guard — prevents stacking multiple entries on the same pair
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _has_active_open_trade(symbol: str) -> bool:
+    """
+    Check if symbol already has an active open trade:
+      - in post_mortem.load_active_trades() with status == "OPEN"
+      - or an unclosed EXECUTED trade in trades_log.csv from the last 48h
+    """
+    clean_sym = symbol.split(" ")[0].upper()
+
+    # 1. Check active_trades.json via post_mortem
+    try:
+        active_trades = post_mortem.load_active_trades()
+        if isinstance(active_trades, dict):
+            for trade in active_trades.values():
+                if not isinstance(trade, dict):
+                    continue
+                t_pair = str(trade.get("pair", "")).split(" ")[0].upper()
+                t_status = str(trade.get("status", "")).strip().upper()
+                if t_pair == clean_sym and t_status == "OPEN":
+                    return True
+    except Exception as exc:
+        print(f"  [main] Warning checking active trades store: {exc}")
+
+    # 2. Check open EXECUTED rows in trades_log.csv from the last 48h
+    log_file = getattr(journal, "LOG_FILE", None)
+    if log_file and os.path.exists(log_file):
+        try:
+            eat_tz = pytz.timezone(config.TIMEZONE)
+            now_eat = datetime.now(tz=eat_tz)
+            cutoff_48h = now_eat - timedelta(hours=48)
+
+            with open(log_file, "r", newline="", encoding="utf-8") as fh:
+                reader = csv.DictReader(fh)
+                for row in reader:
+                    r_pair = str(row.get("pair", "")).split(" ")[0].upper()
+                    if r_pair != clean_sym:
+                        continue
+                    r_outcome = str(row.get("outcome", "")).strip().upper()
+                    r_exit_p = str(row.get("exit_price", "")).strip()
+                    r_exit_t = str(row.get("exit_time", "")).strip()
+
+                    if r_outcome == "EXECUTED" and not r_exit_p and not r_exit_t:
+                        ts_str = str(row.get("timestamp_eat", "")).strip()
+                        try:
+                            row_ts = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
+                            row_ts = eat_tz.localize(row_ts)
+                            if row_ts >= cutoff_48h:
+                                return True
+                        except (ValueError, TypeError):
+                            return True
+        except Exception as exc:
+            print(f"  [main] Warning reading trades log: {exc}")
+
+    return False
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -100,6 +161,11 @@ def run_scan() -> None:
     fetched_15m_by_pair: dict[str, Any] = {}
     for idx, symbol in enumerate(config.WATCHLIST):
         print(f"\n── Analysing {symbol} ─────────────────────────────────")
+
+        # ── Active open trade guard ───────────────────────────────────────────
+        if _has_active_open_trade(symbol):
+            print(f"  ⏭️ Skipping {symbol} — active trade already open.")
+            continue
 
         # ── Pair cooldown guard ───────────────────────────────────────────────
         cooldown_hours = getattr(config, "PAIR_COOLDOWN_HOURS", 1)

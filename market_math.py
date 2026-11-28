@@ -150,6 +150,7 @@ def _build_empty_result(
         "account_balance":              config.ACCOUNT_BALANCE,
         "max_risk_usd":                 max_risk_usd,
         "atr_buffer":                   0.0,
+        "distance_from_zone_atr":       0.0,
         "value_area_type":              "NONE",
         "directional_candle_confirmed": False,
         "candle_quality":               "NONE",
@@ -336,6 +337,39 @@ def analyse(
     )
     result.update(risk_metrics)
 
+    # ── Anchor Zone Distance & Trigger Candle Climax Detection ────────────────
+    entry = risk_metrics.get("entry_price") or current_price
+    direction = risk_metrics.get("direction", "NONE")
+    va_type = result.get("value_area_type", "NONE")
+
+    if va_type == "FIB_GOLDEN_ZONE":
+        zone_distance = 0.0
+    elif va_type == "DYNAMIC_EMA50":
+        zone_distance = abs(entry - ema50_last)
+    elif direction == "LONG" or (direction == "NONE" and trend == "UPTREND"):
+        if nearest_support:
+            zone_distance = abs(entry - nearest_support["price"])
+        else:
+            zone_distance = abs(entry - ema50_last)
+    elif direction == "SHORT" or (direction == "NONE" and trend == "DOWNTREND"):
+        if nearest_resistance:
+            zone_distance = abs(nearest_resistance["price"] - entry)
+        else:
+            zone_distance = abs(entry - ema50_last)
+    else:
+        zone_distance = 0.0
+
+    distance_from_zone_atr = round(zone_distance / atr_1h, 2) if atr_1h > 0 else 0.0
+    result["distance_from_zone_atr"] = distance_from_zone_atr
+
+    trigger_high = float(candle_story.get("high", 0.0))
+    trigger_low = float(candle_story.get("low", 0.0))
+    trigger_range = trigger_high - trigger_low
+    body_pct = float(candle_story.get("body_pct", 0.0))
+
+    is_climax_bar = bool(candle_story.get("available") and (trigger_range > 2.0 * atr_15m) and (body_pct > 0.65))
+    is_overextended_move = bool(zone_distance > 0.85 * atr_1h)
+
     # ── 8. Gate 2 Setup Score (0–100) & Safety Rules ──────────────────────────
     score_structure = 0
     if structure_event in ("HH_HL", "LH_LL", "BOS_BULLISH", "BOS_BEARISH"):
@@ -409,6 +443,10 @@ def analyse(
         all_hard_rules_pass = False
         result["fail_reasons"].append("Price is not in a value area (S/R zone, Fib golden zone, or dynamic EMA50) — no edge.")
 
+    if is_overextended_move or is_climax_bar:
+        all_hard_rules_pass = False
+        result["fail_reasons"].append("Entry is overextended away from value area — chasing late momentum.")
+
     if rr < min_rr:
         all_hard_rules_pass = False
         result["fail_reasons"].append(f"R:R ratio {rr:.2f} < minimum {min_rr}.")
@@ -430,7 +468,7 @@ def analyse(
     actual_risk_usd = risk_metrics.get("actual_risk_usd", 0.0)
     print(
         f"  [market_math] {symbol} | Struct: {structure_event} | 4H: {trend_4h} | "
-        f"Area: {result['value_area_type']} | Candle: {candle_quality} | "
+        f"Area: {result['value_area_type']} | Dist: {distance_from_zone_atr} ATR | Candle: {candle_quality} | "
         f"Score: {math_setup_score}/100 | Risk: ${actual_risk_usd}"
     )
 
@@ -975,8 +1013,19 @@ def _calculate_risk(
     """
     pip_size = 0.01 if "JPY" in symbol else 0.0001
     max_risk_usd = round(config.ACCOUNT_BALANCE * config.MAX_RISK_PERCENT, 2)
-    atr_buffer = 0.5 * atr_15m + (2 * pip_size)
+    atr_buffer = max(0.75 * atr_1h, 1.5 * atr_15m) + (2 * pip_size)
     pip_value_usd = _get_pip_value_usd(symbol, current_price)
+
+    # Enforce pair-aware minimum SL distance floor
+    clean_sym = symbol.split(" ")[0].upper()
+    if clean_sym in ("EUR/JPY", "GBP/JPY", "GBP/AUD", "GBP/NZD"):
+        min_sl_pips = 28.0
+    elif clean_sym in ("EUR/USD", "GBP/USD", "USD/JPY", "USD/CHF", "AUD/USD"):
+        min_sl_pips = 18.0
+    else:
+        min_sl_pips = 18.0
+
+    min_sl_distance = min_sl_pips * pip_size
 
     closed_15m = df_15m.iloc[:-1]
     recent_slice = closed_15m.iloc[-6:] if len(closed_15m) >= 6 else closed_15m
@@ -994,16 +1043,16 @@ def _calculate_risk(
             stop_loss = min(recent_low, ema50_last) - atr_buffer
 
         risk_distance = entry - stop_loss
-        if risk_distance <= 2 * pip_size:
-            stop_loss = entry - max(risk_distance, 5 * pip_size)
-            risk_distance = entry - stop_loss
+        if risk_distance < min_sl_distance:
+            stop_loss = entry - min_sl_distance
+            risk_distance = min_sl_distance
 
         # TP Placement
         if nearest_resistance and (nearest_resistance["price"] - entry) >= 1.0 * atr_1h:
             take_profit = nearest_resistance["price"] - (2 * pip_size)
             tp_source = "SR_ZONE"
         else:
-            fallback_dist = min(2.2 * risk_distance, 2.5 * atr_1h)
+            fallback_dist = min(2.2 * risk_distance, 3.5 * atr_1h)
             take_profit = entry + fallback_dist
             tp_source = "ATR_STRUCTURAL"
 
@@ -1018,16 +1067,16 @@ def _calculate_risk(
             stop_loss = max(recent_high, ema50_last) + atr_buffer
 
         risk_distance = stop_loss - entry
-        if risk_distance <= 2 * pip_size:
-            stop_loss = entry + max(risk_distance, 5 * pip_size)
-            risk_distance = stop_loss - entry
+        if risk_distance < min_sl_distance:
+            stop_loss = entry + min_sl_distance
+            risk_distance = min_sl_distance
 
         # TP Placement
         if nearest_support and (entry - nearest_support["price"]) >= 1.0 * atr_1h:
             take_profit = nearest_support["price"] + (2 * pip_size)
             tp_source = "SR_ZONE"
         else:
-            fallback_dist = min(2.2 * risk_distance, 2.5 * atr_1h)
+            fallback_dist = min(2.2 * risk_distance, 3.5 * atr_1h)
             take_profit = entry - fallback_dist
             tp_source = "ATR_STRUCTURAL"
 
